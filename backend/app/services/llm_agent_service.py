@@ -58,7 +58,7 @@ TOOL_DEFINITION = {
     },
 }
 
-MAX_ROUNDS = 5
+MAX_ROUNDS = 50
 
 
 async def _get_schema_text(pools: dict, connection_name: str) -> str:
