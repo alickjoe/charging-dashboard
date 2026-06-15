@@ -22,6 +22,7 @@ async def fetch_chart_data(
     table_name: str,
     x_column: str,
     y_column: str,
+    schema: str = "public",
     aggregation: str = "sum",
     group_by: str = "date_trunc_day",
     time_from: Optional[str] = None,
@@ -30,6 +31,7 @@ async def fetch_chart_data(
 ) -> dict:
     """Build and execute an aggregation query for chart data."""
     pool = await get_pool(pools, connection_name)
+    qualified_name = f'"{schema}"."{table_name}"'
 
     # Validate inputs
     if aggregation not in ALLOWED_AGGREGATIONS:
@@ -41,12 +43,12 @@ async def fetch_chart_data(
         # Get valid columns from information_schema (whitelist)
         cols = await conn.fetch("""
             SELECT column_name FROM information_schema.columns
-            WHERE table_name = $1
-        """, table_name)
+            WHERE table_schema = $1 AND table_name = $2
+        """, schema, table_name)
         valid_columns = {c["column_name"] for c in cols}
 
         if not valid_columns:
-            raise ValueError(f"Table '{table_name}' not found")
+            raise ValueError(f"Table '{schema}.{table_name}' not found")
 
         # Validate x_column and y_column
         if x_column not in valid_columns:
@@ -97,7 +99,7 @@ async def fetch_chart_data(
 
         sql = f"""
             SELECT {select_x}, {agg_expr} AS y_val
-            FROM "{table_name}"
+            FROM {qualified_name}
             {where_clause}
             {group_clause}
             {order_clause}

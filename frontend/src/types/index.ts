@@ -74,6 +74,22 @@ export interface TableDataResponse {
   rows: unknown[][];
 }
 
+export interface Annotation {
+  id: number;
+  connection_name: string;
+  table_name: string;
+  column_name: string | null;
+  annotation: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AnnotationUpsert {
+  table_name: string;
+  column_name?: string;
+  annotation: string;
+}
+
 export interface ChartDataRequest {
   x_column: string;
   y_column: string;

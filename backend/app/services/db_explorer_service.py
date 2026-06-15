@@ -51,6 +51,7 @@ async def list_columns(
     pools: dict,
     connection_name: str,
     table_name: str,
+    schema: str = "public",
 ) -> list[dict]:
     """List columns for a table with primary key information."""
     pool = await get_pool(pools, connection_name)
@@ -72,9 +73,9 @@ async def list_columns(
                     false
                 ) AS is_primary_key
             FROM information_schema.columns c
-            WHERE c.table_name = $1
+            WHERE c.table_schema = $1 AND c.table_name = $2
             ORDER BY c.ordinal_position
-        """, table_name)
+        """, schema, table_name)
         return [dict(r) for r in rows]
 
 
@@ -82,6 +83,7 @@ async def fetch_table_data(
     pools: dict,
     connection_name: str,
     table_name: str,
+    schema: str = "public",
     page: int = 1,
     page_size: int = 50,
     order_by: Optional[str] = None,
@@ -98,16 +100,18 @@ async def fetch_table_data(
     if page < 1:
         page = 1
 
+    qualified_name = f'"{schema}"."{table_name}"'
+
     # Validate column existence via information_schema
     async with pool.acquire() as conn:
         valid_cols_rows = await conn.fetch("""
             SELECT column_name FROM information_schema.columns
-            WHERE table_name = $1
-        """, table_name)
+            WHERE table_schema = $1 AND table_name = $2
+        """, schema, table_name)
         valid_columns = {r["column_name"] for r in valid_cols_rows}
 
         if not valid_columns:
-            raise ValueError(f"Table '{table_name}' not found or has no columns")
+            raise ValueError(f"Table '{schema}.{table_name}' not found or has no columns")
 
         # Build safe column list
         all_columns = sorted(valid_columns)
@@ -134,7 +138,7 @@ async def fetch_table_data(
         where_clause = f"WHERE {' AND '.join(wheres)}" if wheres else ""
 
         # Count
-        count_sql = f"SELECT COUNT(*) FROM \"{table_name}\" {where_clause}"
+        count_sql = f"SELECT COUNT(*) FROM {qualified_name} {where_clause}"
         total = await conn.fetchval(count_sql, *params)
 
         # Order by
@@ -147,7 +151,7 @@ async def fetch_table_data(
         columns_str = ", ".join(f'"{c}"' for c in all_columns)
         offset = (page - 1) * page_size
         data_sql = (
-            f"SELECT {columns_str} FROM \"{table_name}\" "
+            f"SELECT {columns_str} FROM {qualified_name} "
             f"{where_clause} {order_clause} "
             f"LIMIT {page_size} OFFSET {offset}"
         )

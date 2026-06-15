@@ -73,7 +73,7 @@ async def _get_schema_text(pools: dict, connection_name: str) -> str:
         for table in tables[:20]:  # Limit tables per schema
             table_name = table["table_name"]
             try:
-                cols = await list_columns(pools, connection_name, table_name)
+                cols = await list_columns(pools, connection_name, table_name, schema)
             except Exception:
                 continue
 

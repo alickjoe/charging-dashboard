@@ -10,6 +10,7 @@ import httpx
 from app.database import get_pool
 from app.services.db_explorer_service import list_schemas, list_tables, list_columns
 from app.services.sql_validator import validate_readonly_sql
+from app.sqlite_store import AnnotationStore
 
 logger = logging.getLogger(__name__)
 
@@ -62,11 +63,22 @@ MAX_ROUNDS = 50
 
 
 async def _get_schema_text(pools: dict, connection_name: str) -> str:
-    """Build a text description of the database schema."""
+    """Build a text description of the database schema, including business annotations."""
     try:
         schemas = await list_schemas(pools, connection_name)
     except Exception:
         schemas = ["public"]
+
+    # Fetch business annotations for this connection
+    annotation_rows = await AnnotationStore.list_by_connection(connection_name)
+    table_annotations: dict[str, str] = {}
+    column_annotations: dict[str, dict[str, str]] = {}
+    for a in annotation_rows:
+        tn = a["table_name"]
+        if a["column_name"] is None:
+            table_annotations[tn] = a["annotation"]
+        else:
+            column_annotations.setdefault(tn, {})[a["column_name"]] = a["annotation"]
 
     lines = []
     for schema in schemas[:5]:
@@ -78,7 +90,7 @@ async def _get_schema_text(pools: dict, connection_name: str) -> str:
         for table in tables[:20]:
             table_name = table["table_name"]
             try:
-                cols = await list_columns(pools, connection_name, table_name)
+                cols = await list_columns(pools, connection_name, table_name, schema)
             except Exception:
                 continue
 
@@ -86,13 +98,18 @@ async def _get_schema_text(pools: dict, connection_name: str) -> str:
             for c in cols[:50]:
                 nullable = "NULL" if c["is_nullable"] == "YES" else "NOT NULL"
                 pk = " PRIMARY KEY" if c["is_primary_key"] else ""
-                col_lines.append(f'    "{c["column_name"]}" {c["data_type"]} {nullable}{pk}')
+                col_line = f'    "{c["column_name"]}" {c["data_type"]} {nullable}{pk}'
+                col_anno = column_annotations.get(table_name, {}).get(c["column_name"], "")
+                if col_anno:
+                    col_line += f"  -- {col_anno}"
+                col_lines.append(col_line)
 
             row_est = table.get("row_count_estimate", "?")
-            lines.append(
-                f'Table "{schema}"."{table_name}" (~{row_est} rows):\n'
-                + "\n".join(col_lines)
-            )
+            table_header = f'Table "{schema}"."{table_name}" (~{row_est} rows):'
+            table_anno = table_annotations.get(table_name, "")
+            if table_anno:
+                table_header += f" -- 业务说明: {table_anno}"
+            lines.append(table_header + "\n" + "\n".join(col_lines))
 
     if not lines:
         return "No tables found in any schema."

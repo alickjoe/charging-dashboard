@@ -43,6 +43,17 @@ CREATE TABLE IF NOT EXISTS llm_configs (
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS business_annotations (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    connection_name TEXT NOT NULL,
+    table_name      TEXT NOT NULL,
+    column_name     TEXT,
+    annotation      TEXT NOT NULL DEFAULT '',
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(connection_name, table_name, COALESCE(column_name, ''))
+);
 """
 
 
@@ -332,3 +343,69 @@ class LLMConfigStore:
         if not key or len(key) < 8:
             return "***"
         return key[:3] + "..." + key[-4:]
+
+
+class AnnotationStore:
+    """CRUD operations for business_annotations."""
+
+    @staticmethod
+    async def list_by_connection(connection_name: str) -> list[dict]:
+        def _do():
+            conn = _get_conn()
+            try:
+                rows = conn.execute(
+                    "SELECT * FROM business_annotations WHERE connection_name = ? ORDER BY table_name, column_name",
+                    (connection_name,),
+                ).fetchall()
+                return [dict(r) for r in rows]
+            finally:
+                conn.close()
+        return await asyncio.to_thread(_do)
+
+    @staticmethod
+    async def upsert(
+        connection_name: str,
+        table_name: str,
+        column_name: Optional[str],
+        annotation: str,
+    ) -> dict:
+        def _do():
+            conn = _get_conn()
+            try:
+                conn.execute(
+                    """INSERT INTO business_annotations
+                       (connection_name, table_name, column_name, annotation)
+                       VALUES (?, ?, ?, ?)
+                       ON CONFLICT(connection_name, table_name, COALESCE(column_name, ''))
+                       DO UPDATE SET annotation = excluded.annotation,
+                                     updated_at = datetime('now')""",
+                    (connection_name, table_name, column_name, annotation),
+                )
+                conn.commit()
+                row = conn.execute(
+                    "SELECT * FROM business_annotations WHERE connection_name = ? AND table_name = ? AND column_name IS ?",
+                    (connection_name, table_name, column_name),
+                ).fetchone()
+                return dict(row)
+            finally:
+                conn.close()
+        return await asyncio.to_thread(_do)
+
+    @staticmethod
+    async def delete(
+        connection_name: str,
+        table_name: str,
+        column_name: Optional[str],
+    ) -> bool:
+        def _do():
+            conn = _get_conn()
+            try:
+                cur = conn.execute(
+                    "DELETE FROM business_annotations WHERE connection_name = ? AND table_name = ? AND column_name IS ?",
+                    (connection_name, table_name, column_name),
+                )
+                conn.commit()
+                return cur.rowcount > 0
+            finally:
+                conn.close()
+        return await asyncio.to_thread(_do)

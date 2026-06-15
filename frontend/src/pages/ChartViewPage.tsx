@@ -19,10 +19,12 @@ import TimeFilter from '../components/TimeFilter';
 import type { ChartDataResponse } from '../types';
 
 export default function ChartViewPage() {
-  const { connectionName, tableName } = useParams<{
+  const { connectionName, schema, tableName } = useParams<{
     connectionName: string;
+    schema: string;
     tableName: string;
   }>();
+  const selectedSchema = schema || 'public';
 
   const [xColumn, setXColumn] = useState<string | undefined>();
   const [yColumn, setYColumn] = useState<string | undefined>();
@@ -36,8 +38,8 @@ export default function ChartViewPage() {
   const [chartLoading, setChartLoading] = useState(false);
 
   const { data: columns, isLoading: columnsLoading } = useQuery({
-    queryKey: ['columns', connectionName, tableName],
-    queryFn: () => fetchColumns(connectionName!, tableName!),
+    queryKey: ['columns', connectionName, selectedSchema, tableName],
+    queryFn: () => fetchColumns(connectionName!, tableName!, selectedSchema),
     enabled: !!connectionName && !!tableName,
   });
 
@@ -63,7 +65,7 @@ export default function ChartViewPage() {
         time_from: timeFrom,
         time_to: timeTo,
         limit,
-      });
+      }, selectedSchema);
       setChartData(data);
     } catch (err) {
       console.error('Failed to fetch chart data:', err);

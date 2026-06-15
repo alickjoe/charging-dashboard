@@ -15,7 +15,7 @@ function App() {
         <Route path="/llm-configs" element={<LLMConfigPage />} />
         <Route path="/nl-query" element={<NLQueryPage />} />
         <Route path="/databases/:connectionName" element={<DatabaseExplorerPage />} />
-        <Route path="/charts/:connectionName/:tableName" element={<ChartViewPage />} />
+        <Route path="/charts/:connectionName/:schema/:tableName" element={<ChartViewPage />} />
       </Routes>
     </Layout>
   );

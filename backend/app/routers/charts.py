@@ -1,6 +1,6 @@
 """API routes for chart data aggregation."""
 
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Query
 
 from app.schemas.chart import ChartDataRequest, ChartDataResponse
 from app.services.chart_service import fetch_chart_data
@@ -14,6 +14,7 @@ async def get_chart_data(
     table_name: str,
     request: Request,
     body: ChartDataRequest,
+    schema: str = Query("public"),
 ):
     """Generate aggregated chart data from a table."""
     try:
@@ -21,6 +22,7 @@ async def get_chart_data(
             pools=request.app.state.pools,
             connection_name=name,
             table_name=table_name,
+            schema=schema,
             x_column=body.x_column,
             y_column=body.y_column,
             aggregation=body.aggregation,

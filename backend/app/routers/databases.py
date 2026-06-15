@@ -9,6 +9,8 @@ from app.services.db_explorer_service import (
     list_columns,
     fetch_table_data,
 )
+from app.sqlite_store import AnnotationStore
+from app.schemas.annotation import AnnotationUpsert, AnnotationResponse
 
 router = APIRouter(prefix="/api/v1/connections", tags=["databases"])
 
@@ -38,10 +40,10 @@ async def get_tables(
 
 
 @router.get("/{name}/tables/{table_name}/columns")
-async def get_columns(name: str, table_name: str, request: Request):
+async def get_columns(name: str, table_name: str, request: Request, schema: str = Query("public")):
     """List columns for a table."""
     try:
-        columns = await list_columns(request.app.state.pools, name, table_name)
+        columns = await list_columns(request.app.state.pools, name, table_name, schema)
         return {"columns": columns}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -52,6 +54,7 @@ async def get_table_data(
     name: str,
     table_name: str,
     request: Request,
+    schema: str = Query("public"),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     order_by: Optional[str] = Query(None),
@@ -66,6 +69,7 @@ async def get_table_data(
             pools=request.app.state.pools,
             connection_name=name,
             table_name=table_name,
+            schema=schema,
             page=page,
             page_size=page_size,
             order_by=order_by,
@@ -77,3 +81,42 @@ async def get_table_data(
         return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+# ─── Annotation CRUD ───────────────────────────────────────────────
+
+
+@router.get("/{name}/annotations", response_model=list[AnnotationResponse])
+async def get_annotations(name: str, request: Request):
+    """Get all business annotations for a connection."""
+    rows = await AnnotationStore.list_by_connection(name)
+    return [AnnotationResponse(**r) for r in rows]
+
+
+@router.put("/{name}/annotations", response_model=AnnotationResponse, status_code=201)
+async def upsert_annotation(name: str, body: AnnotationUpsert, request: Request):
+    """Create or update a business annotation for a table or column."""
+    row = await AnnotationStore.upsert(
+        connection_name=name,
+        table_name=body.table_name,
+        column_name=body.column_name,
+        annotation=body.annotation,
+    )
+    return AnnotationResponse(**row)
+
+
+@router.delete("/{name}/annotations", status_code=204)
+async def delete_annotation(
+    name: str,
+    request: Request,
+    table_name: str = Query(...),
+    column_name: str | None = Query(None),
+):
+    """Delete a business annotation."""
+    deleted = await AnnotationStore.delete(
+        connection_name=name,
+        table_name=table_name,
+        column_name=column_name,
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="注解不存在")
