@@ -119,34 +119,27 @@ export default function DatabaseExplorerPage() {
     }
   });
 
-  // Sync editing state when selected table or data loads
-  const prevTable = useRef<string | null>(null);
+  // Sync editing state only when selected table changes
+  const syncedTable = useRef<string | null>(null);
   useEffect(() => {
-    if (!selectedTable) return;
-    const tableChanged = prevTable.current !== selectedTable;
-    prevTable.current = selectedTable;
+    if (!selectedTable || !columns || annotationsLoading || columnsLoading) return;
+    if (syncedTable.current === selectedTable) return;
+    syncedTable.current = selectedTable;
 
-    if (tableChanged || !annotationsLoading) {
-      setEditingTableAnnotation(tableAnnotation?.annotation || '');
-    }
-    if (tableChanged || (!annotationsLoading && !columnsLoading)) {
-      const colDefaults: Record<string, string> = {};
-      (columns || []).forEach((col) => {
-        const a = columnAnnotationsMap[col.column_name];
-        colDefaults[col.column_name] = a?.annotation || '';
-      });
-      setEditingColumnAnnotations((prev) => {
-        // Merge: keep user edits if no saved annotation exists
-        const merged = { ...colDefaults };
-        (columns || []).forEach((col) => {
-          if (prev[col.column_name] && !colDefaults[col.column_name]) {
-            merged[col.column_name] = prev[col.column_name];
-          }
-        });
-        return merged;
-      });
-    }
-  }, [selectedTable, tableAnnotation, columnAnnotationsMap, annotationsLoading, columnsLoading, columns]);
+    const ta = (annotations || []).find(
+      (a: Annotation) => a.table_name === selectedTable && a.column_name === null
+    );
+    setEditingTableAnnotation(ta?.annotation || '');
+
+    const colDefaults: Record<string, string> = {};
+    columns.forEach((col) => {
+      const ca = (annotations || []).find(
+        (a: Annotation) => a.table_name === selectedTable && a.column_name === col.column_name
+      );
+      colDefaults[col.column_name] = ca?.annotation || '';
+    });
+    setEditingColumnAnnotations(colDefaults);
+  }, [selectedTable, columns, annotations, annotationsLoading, columnsLoading]);
 
   const handleTableClick = (tableName: string) => {
     setSelectedTable(tableName);

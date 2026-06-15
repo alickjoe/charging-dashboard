@@ -51,9 +51,11 @@ CREATE TABLE IF NOT EXISTS business_annotations (
     column_name     TEXT,
     annotation      TEXT NOT NULL DEFAULT '',
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(connection_name, table_name, COALESCE(column_name, ''))
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_business_annotations_unique
+ON business_annotations(connection_name, table_name, COALESCE(column_name, ''));
 """
 
 
