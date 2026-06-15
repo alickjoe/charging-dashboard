@@ -5,6 +5,7 @@ import logging
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 
 from app.schemas.llm import (
     LLMConfigResponse,
@@ -16,6 +17,7 @@ from app.schemas.llm import (
 )
 from app.sqlite_store import LLMConfigStore
 from app.services.llm_service import execute_nl_query
+from app.services.llm_agent_service import run_agent_stream
 
 logger = logging.getLogger(__name__)
 
@@ -152,3 +154,29 @@ async def nl_query(body: NLQueryRequest, request: Request):
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
+
+
+@router.post("/api/v1/nl-query-stream")
+async def nl_query_stream(body: NLQueryRequest, request: Request):
+    """Execute natural language query with SSE streaming (Agent mode)."""
+    pools = request.app.state.pools
+
+    llm_row = await LLMConfigStore.get_by_id(body.llm_config_id)
+    if not llm_row:
+        raise HTTPException(status_code=404, detail=f"LLM 配置 ID={body.llm_config_id} 不存在")
+    llm_row = LLMConfigStore.decrypt_api_key(llm_row)
+
+    return StreamingResponse(
+        run_agent_stream(
+            pools=pools,
+            connection_name=body.connection_name,
+            llm_config=llm_row,
+            question=body.question,
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

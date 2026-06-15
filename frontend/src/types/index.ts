@@ -130,3 +130,15 @@ export interface NLQueryResponse {
   llm_call_time_ms: number;
   cannot_answer?: string;
 }
+
+export type SSEEventType = 'think' | 'sql' | 'result' | 'error' | 'done';
+
+export interface SSEEvent {
+  type: SSEEventType;
+  content?: string;
+  message?: string;
+  columns?: string[];
+  rows?: unknown[][];
+  total_rows?: number;
+  llm_time_ms?: number;
+}
