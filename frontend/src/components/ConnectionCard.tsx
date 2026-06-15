@@ -1,23 +1,26 @@
-import { Card, Tag, Button, Space, message } from 'antd';
+import { Card, Tag, Button, Space, message, Popconfirm } from 'antd';
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
   QuestionCircleOutlined,
   ReloadOutlined,
   EyeOutlined,
-  BarChartOutlined,
+  EditOutlined,
+  DeleteOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { testConnection } from '../api/connections';
+import { deleteConnection } from '../api/connections-admin';
 import type { ConnectionInfo } from '../types';
 import { useState } from 'react';
 
 interface ConnectionCardProps {
   connection: ConnectionInfo;
+  onEdit: (conn: ConnectionInfo) => void;
 }
 
-export default function ConnectionCard({ connection }: ConnectionCardProps) {
+export default function ConnectionCard({ connection, onEdit }: ConnectionCardProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [testing, setTesting] = useState(false);
@@ -45,6 +48,20 @@ export default function ConnectionCard({ connection }: ConnectionCardProps) {
     } finally {
       setTesting(false);
     }
+  };
+
+  const handleDelete = async () => {
+    try {
+      await deleteConnection(connection.name);
+      message.success('连接已删除');
+      queryClient.invalidateQueries({ queryKey: ['connections'] });
+    } catch (err: any) {
+      message.error(err?.response?.data?.detail || '删除失败');
+    }
+  };
+
+  const handleEdit = () => {
+    onEdit(connection);
   };
 
   const handleBrowse = () => {
@@ -89,6 +106,21 @@ export default function ConnectionCard({ connection }: ConnectionCardProps) {
           >
             测试连接
           </Button>
+          <Button icon={<EditOutlined />} onClick={handleEdit}>
+            编辑
+          </Button>
+          <Popconfirm
+            title="确定删除此连接？"
+            description="连接池将被销毁，此操作不可撤销。"
+            onConfirm={handleDelete}
+            okText="删除"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+          >
+            <Button danger icon={<DeleteOutlined />}>
+              删除
+            </Button>
+          </Popconfirm>
         </Space>
       </Space>
     </Card>

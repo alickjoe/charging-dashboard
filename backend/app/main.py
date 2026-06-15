@@ -5,16 +5,19 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import load_config
-from app.database import create_pools, close_pools
-from app.routers import connections, databases, charts
+from app.database import create_pools_from_rows, close_pools
+from app.sqlite_store import init_db, ConnectionStore
+from app.routers import connections, connection_admin, databases, charts, llm
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: load config and create connection pools. Shutdown: close pools."""
-    app.state.db_config = load_config()
-    app.state.pools = await create_pools(app.state.db_config)
+    """Startup: init SQLite and load connections. Shutdown: close pools."""
+    await init_db()
+    rows = await ConnectionStore.list_all()
+    # Decrypt passwords before creating pools
+    rows = [ConnectionStore.decrypt_password(r) for r in rows]
+    app.state.pools = await create_pools_from_rows(rows)
     yield
     await close_pools(app.state.pools)
 
@@ -35,8 +38,10 @@ app.add_middleware(
 
 
 app.include_router(connections.router)
+app.include_router(connection_admin.router)
 app.include_router(databases.router)
 app.include_router(charts.router)
+app.include_router(llm.router)
 
 
 @app.get("/health")

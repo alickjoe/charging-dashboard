@@ -9,6 +9,41 @@ export interface ConnectionInfo {
   last_checked: string | null;
 }
 
+export interface DbConnectionConfig {
+  name: string;
+  label: string;
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  password: string;
+  ssl_mode: string;
+  pool_min: number;
+  pool_max: number;
+  pool_idle: number;
+  query_timeout: number;
+}
+
+export type CreateConnectionRequest = DbConnectionConfig;
+
+export type UpdateConnectionRequest = Partial<DbConnectionConfig>;
+
+export interface TestTempRequest {
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  password: string;
+  ssl_mode: string;
+  query_timeout: number;
+}
+
+export interface TestTempResult {
+  status: 'connected' | 'error';
+  message: string;
+  latency_ms: number;
+}
+
 export interface TestResult {
   name: string;
   status: 'connected' | 'error';
@@ -56,4 +91,42 @@ export interface ChartDataResponse {
     label: string;
     data: number[];
   }[];
+}
+
+export interface LLMConfig {
+  id: number;
+  name: string;
+  api_base: string;
+  api_key_masked: string;
+  model: string;
+  temperature: number;
+  max_tokens: number;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LLMConfigFormData {
+  name: string;
+  api_base: string;
+  api_key: string;
+  model: string;
+  temperature: number;
+  max_tokens: number;
+  is_default: boolean;
+}
+
+export interface NLQueryRequest {
+  connection_name: string;
+  llm_config_id: number;
+  question: string;
+}
+
+export interface NLQueryResponse {
+  sql: string;
+  columns: string[];
+  rows: unknown[][];
+  execution_time_ms: number;
+  llm_call_time_ms: number;
+  cannot_answer?: string;
 }

@@ -4,7 +4,8 @@ import { Layout as AntLayout, Menu, theme } from 'antd';
 import {
   LinkOutlined,
   DatabaseOutlined,
-  BarChartOutlined,
+  RobotOutlined,
+  SearchOutlined,
 } from '@ant-design/icons';
 
 const { Sider, Content, Header } = AntLayout;
@@ -16,10 +17,14 @@ const menuItems = [
     label: '连接管理',
   },
   {
-    key: 'databases-group',
-    icon: <DatabaseOutlined />,
-    label: '数据库浏览',
-    children: [],
+    key: '/llm-configs',
+    icon: <RobotOutlined />,
+    label: 'AI 配置',
+  },
+  {
+    key: '/nl-query',
+    icon: <SearchOutlined />,
+    label: 'AI 查询',
   },
 ];
 
@@ -39,10 +44,12 @@ export default function Layout({ children }: LayoutProps) {
     }
   };
 
-  // Highlight connections page or database explorer page
   const getSelectedKeys = () => {
-    if (location.pathname === '/connections') return ['/connections'];
-    if (location.pathname.startsWith('/databases/')) return ['/connections'];
+    const path = location.pathname;
+    if (path === '/connections') return ['/connections'];
+    if (path === '/llm-configs') return ['/llm-configs'];
+    if (path === '/nl-query') return ['/nl-query'];
+    if (path.startsWith('/databases/') || path.startsWith('/charts/')) return ['/connections'];
     return [];
   };
 

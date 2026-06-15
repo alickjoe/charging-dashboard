@@ -7,39 +7,36 @@ from typing import Dict
 
 import asyncpg
 
-from app.config import AppConfig
+from app.database import test_pool, create_pool_from_row, get_pool
 
 logger = logging.getLogger(__name__)
 
 
-async def get_connection_list(
-    config: AppConfig, pools: Dict[str, asyncpg.Pool]
-) -> list[dict]:
-    """Build connection list with current status for each."""
+async def get_connection_list(pools: Dict[str, asyncpg.Pool]) -> list[dict]:
+    """Build connection list with current status for each pool entry."""
+    from app.sqlite_store import ConnectionStore
+
+    rows = await ConnectionStore.list_all()
     results = []
 
-    for conn in config.connections:
+    for row in rows:
+        name = row["name"]
         status = "disconnected"
         last_checked = None
 
-        pool = pools.get(conn.name)
-        if pool is not None:
-            try:
-                async with pool.acquire() as ac:
-                    await ac.fetchval("SELECT 1")
-                status = "connected"
-            except Exception:
-                status = "error"
+        if await test_pool(pools, name):
+            status = "connected"
+            last_checked = datetime.now(timezone.utc)
 
         results.append({
-            "name": conn.name,
-            "label": conn.label,
-            "type": conn.type,
-            "host": conn.host,
-            "port": conn.port,
-            "database": conn.database,
+            "name": name,
+            "label": row["label"],
+            "type": "postgresql",
+            "host": row["host"],
+            "port": row["port"],
+            "database": row["database"],
             "status": status,
-            "last_checked": datetime.now(timezone.utc) if status != "disconnected" else None,
+            "last_checked": last_checked,
         })
 
     return results
@@ -73,6 +70,30 @@ async def test_single_connection(
         logger.error(f"Connection test failed for {name}: {e}")
         return {
             "name": name,
+            "status": "error",
+            "message": f"连接失败: {str(e)}",
+            "latency_ms": 0,
+        }
+
+
+async def test_temp_connection(params: dict) -> dict:
+    """Test a connection with temporary parameters (not saved to store)."""
+    try:
+        start = time.monotonic()
+        pool = await create_pool_from_row(params)
+        try:
+            async with pool.acquire() as conn:
+                await conn.fetchval("SELECT 1")
+            latency = (time.monotonic() - start) * 1000
+            return {
+                "status": "connected",
+                "message": "连接成功",
+                "latency_ms": round(latency, 2),
+            }
+        finally:
+            await pool.close()
+    except Exception as e:
+        return {
             "status": "error",
             "message": f"连接失败: {str(e)}",
             "latency_ms": 0,
