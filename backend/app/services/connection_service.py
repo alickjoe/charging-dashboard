@@ -1,5 +1,6 @@
 """Service layer for connection management."""
 
+import asyncio
 import time
 import logging
 from datetime import datetime, timezone
@@ -11,24 +12,45 @@ from app.database import test_pool, create_pool_from_row, get_pool
 
 logger = logging.getLogger(__name__)
 
+# Maximum total time spent testing all connections when building the list.
+LIST_TEST_TOTAL_TIMEOUT = 25
+
 
 async def get_connection_list(pools: Dict[str, asyncpg.Pool]) -> list[dict]:
     """Build connection list with current status for each pool entry."""
     from app.sqlite_store import ConnectionStore
 
     rows = await ConnectionStore.list_all()
-    results = []
 
+    async def _test_one(name: str) -> tuple[str, bool | None]:
+        try:
+            alive = await test_pool(pools, name)
+            return name, alive
+        except Exception as exc:
+            logger.warning(f"Connection test failed for {name}: {exc}")
+            return name, None
+
+    # Test all connections concurrently with a total deadline
+    try:
+        async with asyncio.timeout(LIST_TEST_TOTAL_TIMEOUT):
+            tasks = [asyncio.create_task(_test_one(row["name"])) for row in rows]
+            gathered = await asyncio.gather(*tasks)
+            results = dict(gathered)
+    except TimeoutError:
+        results = {}
+
+    final: list[dict] = []
     for row in rows:
         name = row["name"]
         status = "disconnected"
         last_checked = None
 
-        if await test_pool(pools, name):
+        alive = results.get(name)
+        if alive:
             status = "connected"
             last_checked = datetime.now(timezone.utc)
 
-        results.append({
+        final.append({
             "name": name,
             "label": row["label"],
             "type": "postgresql",
@@ -39,7 +61,7 @@ async def get_connection_list(pools: Dict[str, asyncpg.Pool]) -> list[dict]:
             "last_checked": last_checked,
         })
 
-    return results
+    return final
 
 
 async def test_single_connection(
@@ -92,9 +114,15 @@ async def test_temp_connection(params: dict) -> dict:
             }
         finally:
             await pool.close()
+    except asyncio.TimeoutError:
+        return {
+            "status": "error",
+            "message": "连接超时：无法在 10 秒内连接到数据库，请检查网络或主机地址",
+            "latency_ms": 0,
+        }
     except Exception as e:
         return {
             "status": "error",
-            "message": f"连接失败: {str(e)}",
+            "message": f"连接失败: {str(e)}".strip() or "连接失败",
             "latency_ms": 0,
         }

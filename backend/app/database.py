@@ -1,18 +1,30 @@
 """Multi-database connection pool management using asyncpg."""
 
+import asyncio
 import logging
 from typing import Dict
+from urllib.parse import quote
 
 import asyncpg
-from tenacity import retry, stop_after_attempt, wait_fixed
 
 logger = logging.getLogger(__name__)
 
+# Timeout (seconds) for establishing a single database connection.
+# Prevents startup from hanging indefinitely when a host is unreachable.
+CONNECTION_TIMEOUT = 10
+POOL_TEST_TIMEOUT = 5
+
 
 def _build_dsn(row: dict) -> str:
-    """Build a DSN string from a connection row dict."""
+    """Build a DSN string from a connection row dict.
+
+    Username and password are URL-encoded to handle special characters
+    (e.g. ``?``, ``@``, ``%``, ``}``) that would otherwise break DSN parsing.
+    """
+    user = quote(row['username'], safe='')
+    pwd = quote(row['password'], safe='')
     return (
-        f"postgresql://{row['username']}:{row['password']}"
+        f"postgresql://{user}:{pwd}"
         f"@{row['host']}:{row['port']}/{row['database']}"
     )
 
@@ -29,18 +41,20 @@ def _get_ssl_context(ssl_mode: str):
     return False  # disable SSL
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(2), reraise=True)
 async def create_pool_from_row(row: dict) -> asyncpg.Pool:
-    """Create a single connection pool from a row dict, with retry."""
+    """Create a single connection pool from a row dict."""
     dsn = _build_dsn(row)
     ssl_context = _get_ssl_context(row.get("ssl_mode", "prefer"))
 
-    pool = await asyncpg.create_pool(
-        dsn=dsn,
-        min_size=row.get("pool_min", 2),
-        max_size=row.get("pool_max", 10),
-        command_timeout=row.get("query_timeout", 30),
-        ssl=ssl_context,
+    pool = await asyncio.wait_for(
+        asyncpg.create_pool(
+            dsn=dsn,
+            min_size=row.get("pool_min", 2),
+            max_size=row.get("pool_max", 10),
+            command_timeout=row.get("query_timeout", 30),
+            ssl=ssl_context,
+        ),
+        timeout=CONNECTION_TIMEOUT,
     )
     return pool
 
@@ -51,11 +65,19 @@ async def create_pools_from_rows(rows: list[dict]) -> Dict[str, asyncpg.Pool]:
 
     for row in rows:
         try:
-            pool = await create_pool_from_row(row)
+            pool = await asyncio.wait_for(
+                create_pool_from_row(row), timeout=CONNECTION_TIMEOUT
+            )
             pools[row["name"]] = pool
             logger.info(
                 f"Pool created: {row['name']} -> {row['host']}:{row['port']}/{row['database']}"
             )
+        except asyncio.TimeoutError:
+            logger.error(
+                f"Timeout creating pool for {row['name']} "
+                f"({row['host']}:{row['port']})"
+            )
+            pools[row["name"]] = None
         except Exception as e:
             logger.error(f"Failed to create pool for {row['name']}: {e}")
             pools[row["name"]] = None
@@ -108,8 +130,9 @@ async def test_pool(pools: Dict[str, asyncpg.Pool], name: str) -> bool:
     if pool is None:
         return False
     try:
-        async with pool.acquire() as conn:
-            await conn.fetchval("SELECT 1")
+        async with asyncio.timeout(POOL_TEST_TIMEOUT):
+            async with pool.acquire() as conn:
+                await conn.fetchval("SELECT 1")
         return True
     except Exception:
         return False

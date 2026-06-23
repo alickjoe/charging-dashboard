@@ -25,3 +25,6 @@ pgdata-dev/
 # OS
 .DS_Store
 Thumbs.db
+
+# App data (contains credentials)
+backend/data/
