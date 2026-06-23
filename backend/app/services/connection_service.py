@@ -9,6 +9,7 @@ from typing import Dict
 import asyncpg
 
 from app.database import test_pool, create_pool_from_row, get_pool
+from app.database import test_pool, create_pool_from_row, get_pool
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ async def get_connection_list(pools: Dict[str, asyncpg.Pool]) -> list[dict]:
             "port": row["port"],
             "database": row["database"],
             "status": status,
+            "last_checked": last_checked,
             "last_checked": last_checked,
         })
 

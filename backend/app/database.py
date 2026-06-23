@@ -60,9 +60,11 @@ async def create_pool_from_row(row: dict) -> asyncpg.Pool:
 
 
 async def create_pools_from_rows(rows: list[dict]) -> Dict[str, asyncpg.Pool]:
+async def create_pools_from_rows(rows: list[dict]) -> Dict[str, asyncpg.Pool]:
     """Create connection pools for all configured databases."""
     pools: Dict[str, asyncpg.Pool] = {}
 
+    for row in rows:
     for row in rows:
         try:
             pool = await asyncio.wait_for(
@@ -79,6 +81,8 @@ async def create_pools_from_rows(rows: list[dict]) -> Dict[str, asyncpg.Pool]:
             )
             pools[row["name"]] = None
         except Exception as e:
+            logger.error(f"Failed to create pool for {row['name']}: {e}")
+            pools[row["name"]] = None
             logger.error(f"Failed to create pool for {row['name']}: {e}")
             pools[row["name"]] = None
 
@@ -105,12 +109,34 @@ async def rebuild_pool(name: str, pools: Dict[str, asyncpg.Pool], row: dict) -> 
     return pool
 
 
+async def destroy_pool(name: str, pools: Dict[str, asyncpg.Pool]) -> None:
+    """Close and remove a pool by name."""
+    pool = pools.pop(name, None)
+    if pool is not None:
+        try:
+            await pool.close()
+            logger.info(f"Pool destroyed: {name}")
+        except Exception as e:
+            logger.error(f"Error destroying pool {name}: {e}")
+
+
+async def rebuild_pool(name: str, pools: Dict[str, asyncpg.Pool], row: dict) -> asyncpg.Pool:
+    """Destroy existing pool and create a new one from updated config."""
+    await destroy_pool(name, pools)
+    pool = await create_pool_from_row(row)
+    pools[name] = pool
+    logger.info(f"Pool rebuilt: {name}")
+    return pool
+
+
 async def close_pools(pools: Dict[str, asyncpg.Pool]) -> None:
     """Close all connection pools."""
+    for name, pool in list(pools.items()):
     for name, pool in list(pools.items()):
         if pool is not None:
             try:
                 await pool.close()
+                logger.info(f"Pool closed: {name}")
                 logger.info(f"Pool closed: {name}")
             except Exception as e:
                 logger.error(f"Error closing pool {name}: {e}")
