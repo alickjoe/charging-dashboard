@@ -141,6 +141,7 @@ async def run_agent_stream(
     connection_name: str,
     llm_config: dict,
     question: str,
+    history_messages: list | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     Agent loop with SSE streaming output.
@@ -159,10 +160,13 @@ async def run_agent_stream(
     api_key = llm_config["api_key"]
     model = llm_config["model"]
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": question},
-    ]
+    # Build messages: system + history (non-system) + new user question
+    messages = [{"role": "system", "content": system_prompt}]
+    if history_messages:
+        for msg in history_messages:
+            if msg.get("role") != "system":
+                messages.append(msg)
+    messages.append({"role": "user", "content": question})
 
     async with httpx.AsyncClient(timeout=120, verify=False) as client:
         for _round in range(MAX_ROUNDS):
@@ -196,42 +200,46 @@ async def run_agent_stream(
                 tool_calls: list[dict] = []
                 tool_call_buf: dict[int, dict] = {}  # index -> {id, name, arguments}
 
-                async for line in resp.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    data_str = line[6:]
-                    if data_str == "[DONE]":
-                        break
+                try:
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        data_str = line[6:]
+                        if data_str == "[DONE]":
+                            break
 
-                    try:
-                        chunk = json.loads(data_str)
-                    except json.JSONDecodeError:
-                        continue
+                        try:
+                            chunk = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
 
-                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        delta = chunk.get("choices", [{}])[0].get("delta", {})
 
-                    # Text content
-                    content = delta.get("content", "")
-                    if content:
-                        accumulated_content += content
-                        yield _sse_event("think", {"content": content})
+                        # Text content
+                        content = delta.get("content", "")
+                        if content:
+                            accumulated_content += content
+                            yield _sse_event("think", {"content": content})
 
-                    # Tool calls in delta
-                    tc_deltas = delta.get("tool_calls", [])
-                    for tc in tc_deltas:
-                        idx = tc.get("index", 0)
-                        if idx not in tool_call_buf:
-                            tool_call_buf[idx] = {
-                                "id": tc.get("id", ""),
-                                "function": {"name": "", "arguments": ""},
-                            }
-                        if tc.get("id"):
-                            tool_call_buf[idx]["id"] = tc["id"]
-                        func = tc.get("function", {})
-                        if func.get("name"):
-                            tool_call_buf[idx]["function"]["name"] += func["name"]
-                        if func.get("arguments"):
-                            tool_call_buf[idx]["function"]["arguments"] += func["arguments"]
+                        # Tool calls in delta
+                        tc_deltas = delta.get("tool_calls", [])
+                        for tc in tc_deltas:
+                            idx = tc.get("index", 0)
+                            if idx not in tool_call_buf:
+                                tool_call_buf[idx] = {
+                                    "id": tc.get("id", ""),
+                                    "function": {"name": "", "arguments": ""},
+                                }
+                            if tc.get("id"):
+                                tool_call_buf[idx]["id"] = tc["id"]
+                            func = tc.get("function", {})
+                            if func.get("name"):
+                                tool_call_buf[idx]["function"]["name"] += func["name"]
+                            if func.get("arguments"):
+                                tool_call_buf[idx]["function"]["arguments"] += func["arguments"]
+                except httpx.ReadTimeout:
+                    logger.warning("LLM stream read timed out after %.1fs", time.monotonic() - llm_start)
+                    yield _sse_event("error", {"message": "LLM 响应超时，已返回部分结果"})
 
             llm_time = round((time.monotonic() - llm_start) * 1000, 2)
 
@@ -260,6 +268,7 @@ async def run_agent_stream(
                 yield _sse_event("done", {
                     "message": accumulated_content,
                     "llm_time_ms": llm_time,
+                    "conversation_messages": messages,
                 })
                 return
 
@@ -311,4 +320,5 @@ async def run_agent_stream(
         yield _sse_event("done", {
             "message": accumulated_content or "已执行最大轮数，分析结束。",
             "llm_time_ms": llm_time,
+            "conversation_messages": messages,
         })

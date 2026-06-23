@@ -136,6 +136,7 @@ export interface NLQueryRequest {
   connection_name: string;
   llm_config_id: number;
   question: string;
+  conversation_id?: number;
 }
 
 export interface NLQueryResponse {
@@ -157,4 +158,32 @@ export interface SSEEvent {
   rows?: unknown[][];
   total_rows?: number;
   llm_time_ms?: number;
+  conversation_id?: number;
+}
+
+// ─── Conversations ─────────────────────────────────────────────
+
+export interface Conversation {
+  id: number;
+  title: string;
+  connection_name: string;
+  llm_config_id: number;
+  message_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConversationMessage {
+  id: number;
+  conversation_id: number;
+  role: 'user' | 'assistant';
+  question: string;
+  answer_blocks: string;  // JSON string of StreamBlock[]
+  llm_time_ms: number | null;
+  raw_messages: string;
+  created_at: string;
+}
+
+export interface ConversationDetail extends Conversation {
+  messages: ConversationMessage[];
 }

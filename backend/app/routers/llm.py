@@ -1,5 +1,6 @@
 """API routes for LLM configuration management and natural language queries."""
 
+import json
 import time
 import logging
 
@@ -15,7 +16,7 @@ from app.schemas.llm import (
     NLQueryRequest,
     NLQueryResponse,
 )
-from app.sqlite_store import LLMConfigStore
+from app.sqlite_store import LLMConfigStore, ConversationStore
 from app.services.llm_service import execute_nl_query
 from app.services.llm_agent_service import run_agent_stream
 
@@ -158,7 +159,11 @@ async def nl_query(body: NLQueryRequest, request: Request):
 
 @router.post("/api/v1/nl-query-stream")
 async def nl_query_stream(body: NLQueryRequest, request: Request):
-    """Execute natural language query with SSE streaming (Agent mode)."""
+    """Execute natural language query with SSE streaming (Agent mode).
+
+    Supports conversation persistence: if conversation_id is provided, loads
+    previous messages and continues the conversation. Saves new messages on done.
+    """
     pools = request.app.state.pools
 
     llm_row = await LLMConfigStore.get_by_id(body.llm_config_id)
@@ -166,13 +171,86 @@ async def nl_query_stream(body: NLQueryRequest, request: Request):
         raise HTTPException(status_code=404, detail=f"LLM 配置 ID={body.llm_config_id} 不存在")
     llm_row = LLMConfigStore.decrypt_api_key(llm_row)
 
-    return StreamingResponse(
-        run_agent_stream(
+    # Load history messages if continuing a conversation
+    history_messages = []
+    conversation_id = body.conversation_id
+    if conversation_id:
+        conv = await ConversationStore.get_by_id(conversation_id)
+        if not conv:
+            raise HTTPException(status_code=404, detail=f"会话 ID={conversation_id} 不存在")
+        history_messages = await ConversationStore.get_latest_raw_messages(conversation_id)
+    else:
+        # Pre-create conversation so we can return its ID in the done event
+        conv = await ConversationStore.create(
+            connection_name=body.connection_name,
+            llm_config_id=body.llm_config_id,
+            title="",
+        )
+        conversation_id = conv["id"]
+
+    async def event_generator():
+        collected_blocks: list[dict] = []
+        final_llm_time = None
+        final_conversation_messages = None
+        done_sse_str: str | None = None
+
+        async for sse_str in run_agent_stream(
             pools=pools,
             connection_name=body.connection_name,
             llm_config=llm_row,
             question=body.question,
-        ),
+            history_messages=history_messages if history_messages else None,
+        ):
+            if sse_str.startswith("data: "):
+                try:
+                    event = json.loads(sse_str[6:])
+                    if event.get("type") == "done":
+                        final_llm_time = event.get("llm_time_ms")
+                        final_conversation_messages = event.get("conversation_messages")
+                        # Inject conversation_id and defer yielding until after DB save
+                        event["conversation_id"] = conversation_id
+                        done_sse_str = f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                        break  # exit loop, persist messages, then yield done
+                    etype = event.get("type", "")
+                    if etype in ("think", "sql", "result", "error"):
+                        collected_blocks.append(event)
+                except (json.JSONDecodeError, KeyError):
+                    pass
+
+            yield sse_str
+
+        # Update conversation title from first question (if title is still empty)
+        current_conv = await ConversationStore.get_by_id(conversation_id)
+        if current_conv and not current_conv.get("title"):
+            title = body.question[:30] if len(body.question) > 30 else body.question
+            await ConversationStore.update_title(conversation_id, title)
+
+        raw_msgs_json = json.dumps(final_conversation_messages or [], ensure_ascii=False)
+        blocks_json = json.dumps(collected_blocks, ensure_ascii=False)
+
+        await ConversationStore.add_message(
+            conversation_id=conversation_id,
+            role="user",
+            question=body.question,
+            answer_blocks="[]",
+            llm_time_ms=None,
+            raw_messages=raw_msgs_json,
+        )
+        await ConversationStore.add_message(
+            conversation_id=conversation_id,
+            role="assistant",
+            question="",
+            answer_blocks=blocks_json,
+            llm_time_ms=final_llm_time,
+            raw_messages=raw_msgs_json,
+        )
+
+        # Now yield the done event — frontend will see messages when it reloads
+        if done_sse_str:
+            yield done_sse_str
+
+    return StreamingResponse(
+        event_generator(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

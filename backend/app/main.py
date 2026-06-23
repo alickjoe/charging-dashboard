@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import create_pools_from_rows, close_pools
 from app.sqlite_store import init_db, ConnectionStore
-from app.routers import connections, connection_admin, databases, charts, llm
+from app.routers import connections, connection_admin, databases, charts, llm, conversations
 
 
 @asynccontextmanager
@@ -42,6 +42,7 @@ app.include_router(connection_admin.router)
 app.include_router(databases.router)
 app.include_router(charts.router)
 app.include_router(llm.router)
+app.include_router(conversations.router)
 
 
 @app.get("/health")

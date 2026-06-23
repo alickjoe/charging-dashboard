@@ -56,6 +56,26 @@ CREATE TABLE IF NOT EXISTS business_annotations (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_business_annotations_unique
 ON business_annotations(connection_name, table_name, COALESCE(column_name, ''));
+
+CREATE TABLE IF NOT EXISTS conversations (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    title           TEXT NOT NULL DEFAULT '',
+    connection_name TEXT NOT NULL,
+    llm_config_id   INTEGER NOT NULL,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS conversation_messages (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    role            TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+    question        TEXT NOT NULL DEFAULT '',
+    answer_blocks   TEXT NOT NULL DEFAULT '[]',
+    llm_time_ms     REAL,
+    raw_messages    TEXT NOT NULL DEFAULT '[]',
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
@@ -408,6 +428,160 @@ class AnnotationStore:
                 )
                 conn.commit()
                 return cur.rowcount > 0
+            finally:
+                conn.close()
+        return await asyncio.to_thread(_do)
+
+
+class ConversationStore:
+    """CRUD operations for conversations and conversation_messages."""
+
+    @staticmethod
+    async def create(connection_name: str, llm_config_id: int, title: str = "") -> dict:
+        def _do():
+            conn = _get_conn()
+            try:
+                conn.execute(
+                    "INSERT INTO conversations (title, connection_name, llm_config_id) VALUES (?, ?, ?)",
+                    (title, connection_name, llm_config_id),
+                )
+                conn.commit()
+                row = conn.execute(
+                    "SELECT * FROM conversations WHERE id = last_insert_rowid()"
+                ).fetchone()
+                return dict(row)
+            finally:
+                conn.close()
+        return await asyncio.to_thread(_do)
+
+    @staticmethod
+    async def list_all() -> list[dict]:
+        def _do():
+            conn = _get_conn()
+            try:
+                rows = conn.execute(
+                    """SELECT c.*, COUNT(cm.id) as message_count
+                       FROM conversations c
+                       LEFT JOIN conversation_messages cm ON cm.conversation_id = c.id
+                       GROUP BY c.id
+                       ORDER BY c.updated_at DESC"""
+                ).fetchall()
+                return [dict(r) for r in rows]
+            finally:
+                conn.close()
+        return await asyncio.to_thread(_do)
+
+    @staticmethod
+    async def get_by_id(conversation_id: int) -> Optional[dict]:
+        def _do():
+            conn = _get_conn()
+            try:
+                row = conn.execute(
+                    "SELECT * FROM conversations WHERE id = ?", (conversation_id,)
+                ).fetchone()
+                if not row:
+                    return None
+                result = dict(row)
+                msgs = conn.execute(
+                    "SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY id ASC",
+                    (conversation_id,),
+                ).fetchall()
+                result["messages"] = [dict(m) for m in msgs]
+                return result
+            finally:
+                conn.close()
+        return await asyncio.to_thread(_do)
+
+    @staticmethod
+    async def delete(conversation_id: int) -> bool:
+        def _do():
+            conn = _get_conn()
+            try:
+                conn.execute("DELETE FROM conversation_messages WHERE conversation_id = ?", (conversation_id,))
+                cur = conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+                conn.commit()
+                return cur.rowcount > 0
+            finally:
+                conn.close()
+        return await asyncio.to_thread(_do)
+
+    @staticmethod
+    async def update_title(conversation_id: int, title: str) -> Optional[dict]:
+        def _do():
+            conn = _get_conn()
+            try:
+                conn.execute(
+                    "UPDATE conversations SET title = ?, updated_at = datetime('now') WHERE id = ?",
+                    (title, conversation_id),
+                )
+                conn.commit()
+                row = conn.execute(
+                    "SELECT * FROM conversations WHERE id = ?", (conversation_id,)
+                ).fetchone()
+                return dict(row) if row else None
+            finally:
+                conn.close()
+        return await asyncio.to_thread(_do)
+
+    @staticmethod
+    async def add_message(
+        conversation_id: int,
+        role: str,
+        question: str,
+        answer_blocks: str,
+        llm_time_ms: Optional[float],
+        raw_messages: str,
+    ) -> dict:
+        def _do():
+            conn = _get_conn()
+            try:
+                conn.execute(
+                    """INSERT INTO conversation_messages
+                       (conversation_id, role, question, answer_blocks, llm_time_ms, raw_messages)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (conversation_id, role, question, answer_blocks, llm_time_ms, raw_messages),
+                )
+                conn.execute(
+                    "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
+                    (conversation_id,),
+                )
+                conn.commit()
+                row = conn.execute(
+                    "SELECT * FROM conversation_messages WHERE id = last_insert_rowid()"
+                ).fetchone()
+                return dict(row)
+            finally:
+                conn.close()
+        return await asyncio.to_thread(_do)
+
+    @staticmethod
+    async def get_messages(conversation_id: int) -> list[dict]:
+        def _do():
+            conn = _get_conn()
+            try:
+                rows = conn.execute(
+                    "SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY id ASC",
+                    (conversation_id,),
+                ).fetchall()
+                return [dict(r) for r in rows]
+            finally:
+                conn.close()
+        return await asyncio.to_thread(_do)
+
+    @staticmethod
+    async def get_latest_raw_messages(conversation_id: int) -> list:
+        """Return the raw_messages JSON from the latest message, or empty list."""
+        import json as _json
+        def _do():
+            conn = _get_conn()
+            try:
+                row = conn.execute(
+                    "SELECT raw_messages FROM conversation_messages WHERE conversation_id = ? ORDER BY id DESC LIMIT 1",
+                    (conversation_id,),
+                ).fetchone()
+                if row and row["raw_messages"]:
+                    return _json.loads(row["raw_messages"])
+                return []
             finally:
                 conn.close()
         return await asyncio.to_thread(_do)
