@@ -25,13 +25,14 @@ export default function ConnectionCard({ connection, onEdit }: ConnectionCardPro
   const queryClient = useQueryClient();
   const [testing, setTesting] = useState(false);
 
-  const statusConfig = {
+  const statusConfig: Record<string, { color: string; icon: React.ReactNode; text: string }> = {
     connected: { color: 'green', icon: <CheckCircleOutlined />, text: '已连接' },
     disconnected: { color: 'orange', icon: <QuestionCircleOutlined />, text: '未连接' },
     error: { color: 'red', icon: <CloseCircleOutlined />, text: '错误' },
+    unknown: { color: 'default', icon: <QuestionCircleOutlined />, text: '未检测' },
   };
 
-  const status = statusConfig[connection.status];
+  const status = statusConfig[connection.status] ?? statusConfig.unknown;
 
   const handleTest = async () => {
     setTesting(true);
