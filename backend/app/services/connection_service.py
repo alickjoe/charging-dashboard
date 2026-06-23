@@ -41,9 +41,38 @@ async def get_connection_list(pools: Dict[str, asyncpg.Pool]) -> list[dict]:
 async def test_single_connection(
     name: str, pools: Dict[str, asyncpg.Pool]
 ) -> dict:
-    """Test a specific connection, return latency and status."""
+    """Test a specific connection, return latency and status.
+
+    If a live pool already exists it is tested directly; otherwise the
+    stored credentials are used to attempt a fresh connection.
+    """
+    from app.sqlite_store import ConnectionStore
+
     pool = pools.get(name)
-    if pool is None:
+    if pool is not None:
+        try:
+            start = time.monotonic()
+            async with pool.acquire() as conn:
+                await conn.fetchval("SELECT 1")
+            latency = (time.monotonic() - start) * 1000
+            return {
+                "name": name,
+                "status": "connected",
+                "message": "连接成功",
+                "latency_ms": round(latency, 2),
+            }
+        except Exception as e:
+            logger.error(f"Connection test failed for {name}: {e}")
+            return {
+                "name": name,
+                "status": "error",
+                "message": f"连接失败: {str(e)}",
+                "latency_ms": 0,
+            }
+
+    # No live pool — attempt a fresh connection with stored credentials
+    row = await ConnectionStore.get_by_name(name)
+    if row is None:
         return {
             "name": name,
             "status": "error",
@@ -51,25 +80,10 @@ async def test_single_connection(
             "latency_ms": 0,
         }
 
-    try:
-        start = time.monotonic()
-        async with pool.acquire() as conn:
-            await conn.fetchval("SELECT 1")
-        latency = (time.monotonic() - start) * 1000
-        return {
-            "name": name,
-            "status": "connected",
-            "message": "连接成功",
-            "latency_ms": round(latency, 2),
-        }
-    except Exception as e:
-        logger.error(f"Connection test failed for {name}: {e}")
-        return {
-            "name": name,
-            "status": "error",
-            "message": f"连接失败: {str(e)}",
-            "latency_ms": 0,
-        }
+    params = ConnectionStore.decrypt_password(row)
+    result = await test_temp_connection(params)
+    result["name"] = name
+    return result
 
 
 async def test_temp_connection(params: dict) -> dict:
