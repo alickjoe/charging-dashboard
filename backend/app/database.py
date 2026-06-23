@@ -60,28 +60,30 @@ async def create_pool_from_row(row: dict) -> asyncpg.Pool:
 
 
 async def create_pools_from_rows(rows: list[dict]) -> Dict[str, asyncpg.Pool]:
-    """Create connection pools for all configured databases."""
+    """Create connection pools for all configured databases concurrently."""
     pools: Dict[str, asyncpg.Pool] = {}
 
-    for row in rows:
+    async def _create_one(row: dict) -> None:
+        name = row["name"]
         try:
             pool = await asyncio.wait_for(
                 create_pool_from_row(row), timeout=CONNECTION_TIMEOUT
             )
-            pools[row["name"]] = pool
+            pools[name] = pool
             logger.info(
-                f"Pool created: {row['name']} -> {row['host']}:{row['port']}/{row['database']}"
+                f"Pool created: {name} -> {row['host']}:{row['port']}/{row['database']}"
             )
         except asyncio.TimeoutError:
             logger.error(
-                f"Timeout creating pool for {row['name']} "
+                f"Timeout creating pool for {name} "
                 f"({row['host']}:{row['port']})"
             )
-            pools[row["name"]] = None
+            pools[name] = None
         except Exception as e:
-            logger.error(f"Failed to create pool for {row['name']}: {e}")
-            pools[row["name"]] = None
+            logger.error(f"Failed to create pool for {name}: {e}")
+            pools[name] = None
 
+    await asyncio.gather(*(_create_one(row) for row in rows))
     return pools
 
 

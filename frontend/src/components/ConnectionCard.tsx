@@ -43,7 +43,16 @@ export default function ConnectionCard({ connection, onEdit }: ConnectionCardPro
       } else {
         message.error(result.message);
       }
-      queryClient.invalidateQueries({ queryKey: ['connections'] });
+      // Update status in cache directly so the card reflects the result
+      queryClient.setQueryData<ConnectionInfo[]>(
+        ['connections'],
+        (old) =>
+          (old || []).map((c) =>
+            c.name === connection.name
+              ? { ...c, status: result.status, last_checked: new Date().toISOString() }
+              : c
+          )
+      );
     } catch {
       message.error('测试连接失败');
     } finally {

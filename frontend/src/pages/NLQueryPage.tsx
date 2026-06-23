@@ -120,7 +120,6 @@ export default function NLQueryPage() {
   const { data: connections, isLoading: loadingConns } = useQuery({
     queryKey: ['connections'],
     queryFn: fetchConnections,
-    refetchInterval: 60000,
   });
 
   const { data: llmConfigs, isLoading: loadingLLMs } = useQuery({
@@ -128,9 +127,9 @@ export default function NLQueryPage() {
     queryFn: fetchLLMConfigs,
   });
 
-  const connectedConns = (connections || []).filter(
-    (c: ConnectionInfo) => c.status === 'connected'
-  );
+  // Show all saved connections — users can test/unlock them from the
+  // connection list page; the NL query page should list every option.
+  const availableConns = connections || [];
 
   const flushThink = useCallback((text: string) => {
     if (!text.trim()) return;
@@ -257,7 +256,7 @@ export default function NLQueryPage() {
               loading={loadingConns}
               disabled={querying}
               style={{ minWidth: 280 }}
-              options={connectedConns.map((c: ConnectionInfo) => ({
+              options={availableConns.map((c: ConnectionInfo) => ({
                 value: c.name,
                 label: `${c.label} (${c.database})`,
               }))}
