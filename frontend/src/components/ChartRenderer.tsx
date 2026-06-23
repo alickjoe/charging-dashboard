@@ -11,6 +11,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import type { ChartDataResponse } from '../types';
+import type React from 'react';
 
 interface ChartRendererProps {
   data: ChartDataResponse | null;
@@ -43,8 +44,8 @@ export default function ChartRenderer({ data, chartType, loading }: ChartRendere
     return row;
   });
 
-  const ChartComponent = chartType === 'bar' ? BarChart : LineChart;
-  const DataComponent = chartType === 'bar' ? Bar : Line;
+  const ChartComponent = (chartType === 'bar' ? BarChart : LineChart) as React.ComponentType<any>;
+  const DataComponent = (chartType === 'bar' ? Bar : Line) as React.ComponentType<any>;
 
   return (
     <ResponsiveContainer width="100%" height={400}>

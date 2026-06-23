@@ -3,67 +3,39 @@
 import asyncio
 import time
 import logging
-from datetime import datetime, timezone
 from typing import Dict
 
 import asyncpg
 
-from app.database import test_pool, create_pool_from_row, get_pool
-from app.database import test_pool, create_pool_from_row, get_pool
+from app.database import create_pool_from_row
 
 logger = logging.getLogger(__name__)
 
-# Maximum total time spent testing all connections when building the list.
-LIST_TEST_TOTAL_TIMEOUT = 25
-
 
 async def get_connection_list(pools: Dict[str, asyncpg.Pool]) -> list[dict]:
-    """Build connection list with current status for each pool entry."""
+    """Build connection list without testing pools.
+
+    Connection status is deliberately *not* tested here so that the page
+    loads instantly.  Users can test individual connections on demand via
+    the ``POST /{name}/test`` endpoint.
+    """
     from app.sqlite_store import ConnectionStore
 
     rows = await ConnectionStore.list_all()
 
-    async def _test_one(name: str) -> tuple[str, bool | None]:
-        try:
-            alive = await test_pool(pools, name)
-            return name, alive
-        except Exception as exc:
-            logger.warning(f"Connection test failed for {name}: {exc}")
-            return name, None
-
-    # Test all connections concurrently with a total deadline
-    try:
-        async with asyncio.timeout(LIST_TEST_TOTAL_TIMEOUT):
-            tasks = [asyncio.create_task(_test_one(row["name"])) for row in rows]
-            gathered = await asyncio.gather(*tasks)
-            results = dict(gathered)
-    except TimeoutError:
-        results = {}
-
-    final: list[dict] = []
-    for row in rows:
-        name = row["name"]
-        status = "disconnected"
-        last_checked = None
-
-        alive = results.get(name)
-        if alive:
-            status = "connected"
-            last_checked = datetime.now(timezone.utc)
-
-        final.append({
-            "name": name,
+    return [
+        {
+            "name": row["name"],
             "label": row["label"],
             "type": "postgresql",
             "host": row["host"],
             "port": row["port"],
             "database": row["database"],
-            "status": status,
-            "last_checked": last_checked,
-            "last_checked": last_checked,
-        })
-
-    return final
+            "status": "unknown",
+            "last_checked": None,
+        }
+        for row in rows
+    ]
 
 
 async def test_single_connection(
