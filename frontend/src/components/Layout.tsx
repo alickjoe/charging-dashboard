@@ -72,68 +72,71 @@ export default function Layout({ children }: LayoutProps) {
         collapsed={collapsed}
         onCollapse={setCollapsed}
         theme="dark"
+        style={{ overflow: 'auto' }}
       >
-        <div
-          style={{
-            height: 64,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: '#fff',
-            fontWeight: 'bold',
-            fontSize: collapsed ? 14 : 18,
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-          }}
-        >
-          {collapsed ? t('app.brandShort') : t('app.brand')}
-        </div>
-        <Menu
-          theme="dark"
-          mode="inline"
-          selectedKeys={getSelectedKeys()}
-          items={menuItems}
-          onClick={handleMenuClick}
-        />
-        {/* Language Switcher */}
-        <div style={{
-          position: 'absolute',
-          bottom: 0,
-          width: '100%',
-          padding: '12px',
-          borderTop: '1px solid rgba(255,255,255,0.1)',
-        }}>
-          {collapsed ? (
-            <Button
-              type="text"
-              block
-              onClick={handleToggleLanguage}
-              style={{ color: 'rgba(255,255,255,0.65)' }}
-            >
-              {language === 'zh' ? 'EN' : '中'}
-            </Button>
-          ) : (
-            <Space style={{ width: '100%', justifyContent: 'center' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+          <div
+            style={{
+              height: 64,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#fff',
+              fontWeight: 'bold',
+              fontSize: collapsed ? 14 : 18,
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              flexShrink: 0,
+            }}
+          >
+            {collapsed ? t('app.brandShort') : t('app.brand')}
+          </div>
+          <Menu
+            theme="dark"
+            mode="inline"
+            selectedKeys={getSelectedKeys()}
+            items={menuItems}
+            onClick={handleMenuClick}
+            style={{ flex: 1, overflow: 'auto' }}
+          />
+          {/* Language Switcher */}
+          <div style={{
+            flexShrink: 0,
+            padding: '12px',
+            borderTop: '1px solid rgba(255,255,255,0.1)',
+          }}>
+            {collapsed ? (
               <Button
-                type={language === 'en' ? 'primary' : 'text'}
-                size="small"
+                type="text"
+                block
                 onClick={handleToggleLanguage}
-                style={language !== 'en' ? { color: 'rgba(255,255,255,0.65)' } : undefined}
-                ghost={language === 'en'}
+                style={{ color: 'rgba(255,255,255,0.65)' }}
               >
-                EN
+                {language === 'zh' ? 'EN' : '中'}
               </Button>
-              <Button
-                type={language === 'zh' ? 'primary' : 'text'}
-                size="small"
-                onClick={handleToggleLanguage}
-                style={language !== 'zh' ? { color: 'rgba(255,255,255,0.65)' } : undefined}
-                ghost={language === 'zh'}
-              >
-                中文
-              </Button>
-            </Space>
-          )}
+            ) : (
+              <Space style={{ width: '100%', justifyContent: 'center' }}>
+                <Button
+                  type={language === 'en' ? 'primary' : 'text'}
+                  size="small"
+                  onClick={handleToggleLanguage}
+                  style={language !== 'en' ? { color: 'rgba(255,255,255,0.65)' } : undefined}
+                  ghost={language === 'en'}
+                >
+                  EN
+                </Button>
+                <Button
+                  type={language === 'zh' ? 'primary' : 'text'}
+                  size="small"
+                  onClick={handleToggleLanguage}
+                  style={language !== 'zh' ? { color: 'rgba(255,255,255,0.65)' } : undefined}
+                  ghost={language === 'zh'}
+                >
+                  中文
+                </Button>
+              </Space>
+            )}
+          </div>
         </div>
       </Sider>
       <AntLayout>
