@@ -37,10 +37,11 @@ interface StreamBlock {
 
 // ─── Markdown Helpers ────────────────────────────────────────────
 
-/** Check if a line is a markdown table separator row (e.g. |---|---|) */
+/** Check if a line is a markdown table separator row (e.g. |---|---| for multi-column) */
 function isTableSeparator(line: string): boolean {
   const trimmed = line.trim();
-  return /^\|[-: ]+\|$/.test(trimmed) && trimmed.includes('-');
+  // Match single or multi-column separators: |---|, |---|---|, |:---|:---:|---|
+  return /^\|[-: ]+(\|[-: ]+)*\|$/.test(trimmed) && trimmed.includes('-');
 }
 
 /** Parse a table row into cell values, stripping leading/trailing pipes */
@@ -283,14 +284,24 @@ function parseAnswerBlocks(raw: string): StreamBlock[] {
   try {
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr)) return [];
-    return arr.map((b: Record<string, unknown>, i: number) => ({
-      key: i,
-      type: (b.type as StreamBlockType) || 'think',
-      content: (b.content as string) || '',
-      columns: b.columns as string[] | undefined,
-      rows: b.rows as unknown[][] | undefined,
-      totalRows: b.total_rows as number | undefined,
-    }));
+    // Merge consecutive think blocks to handle fragmented history data
+    const merged: StreamBlock[] = [];
+    for (const b of arr) {
+      const blockType = (b.type as StreamBlockType) || 'think';
+      if (blockType === 'think' && merged.length > 0 && merged[merged.length - 1].type === 'think') {
+        merged[merged.length - 1].content += (b.content as string) || '';
+      } else {
+        merged.push({
+          key: merged.length,
+          type: blockType,
+          content: (b.content as string) || '',
+          columns: b.columns as string[] | undefined,
+          rows: b.rows as unknown[][] | undefined,
+          totalRows: b.total_rows as number | undefined,
+        });
+      }
+    }
+    return merged;
   } catch {
     return [];
   }
@@ -796,12 +807,12 @@ export default function NLQueryPage() {
                   )}
 
                   {doneMessage && !querying && (
-                    <Alert
-                      type="success"
-                      message="分析完成"
-                      description={doneMessage}
-                      showIcon
-                    />
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={{ marginBottom: 4 }}>
+                        <Tag color="success">分析完成</Tag>
+                      </div>
+                      <RenderMarkdown text={doneMessage} />
+                    </div>
                   )}
 
                   {llmTime && (
