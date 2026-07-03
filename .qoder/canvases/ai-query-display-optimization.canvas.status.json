@@ -1,0 +1,4 @@
+{
+  "status": "compile-error",
+  "diagnosticsText": "The service was stopped: spawn node ENOENT"
+}
