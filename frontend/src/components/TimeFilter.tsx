@@ -1,6 +1,7 @@
 import { DatePicker, Space } from 'antd';
 import dayjs from 'dayjs';
 import type { Dayjs } from 'dayjs';
+import { useTranslation } from 'react-i18next';
 
 const { RangePicker } = DatePicker;
 
@@ -10,6 +11,8 @@ interface TimeFilterProps {
 }
 
 export default function TimeFilter({ onChange, disabled }: TimeFilterProps) {
+  const { t } = useTranslation();
+
   const handleChange = (
     dates: [Dayjs | null, Dayjs | null] | null
   ) => {
@@ -25,13 +28,13 @@ export default function TimeFilter({ onChange, disabled }: TimeFilterProps) {
 
   return (
     <Space>
-      <span>时间筛选：</span>
+      <span>{t('timeFilter.label')}</span>
       <RangePicker
         showTime
         disabled={disabled}
         onChange={handleChange}
         allowClear
-        placeholder={['开始时间', '结束时间']}
+        placeholder={[t('timeFilter.start'), t('timeFilter.end')]}
       />
     </Space>
   );

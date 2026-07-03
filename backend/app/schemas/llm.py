@@ -50,6 +50,7 @@ class NLQueryRequest(BaseModel):
     llm_config_id: int
     question: str = Field(..., min_length=1, max_length=2000)
     conversation_id: Optional[int] = None
+    language: str = "en"  # UI language for AI response: 'en' or 'zh'
 
 
 class NLQueryResponse(BaseModel):

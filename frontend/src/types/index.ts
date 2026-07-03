@@ -137,6 +137,7 @@ export interface NLQueryRequest {
   llm_config_id: number;
   question: string;
   conversation_id?: number;
+  language?: string;
 }
 
 export interface NLQueryResponse {

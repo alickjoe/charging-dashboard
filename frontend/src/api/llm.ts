@@ -58,7 +58,7 @@ export function executeNLQueryStream(
 
       const reader = response.body?.getReader();
       if (!reader) {
-        onError('无法读取响应流');
+        onError('Unable to read response stream');
         onDone();
         return;
       }
@@ -99,7 +99,7 @@ export function executeNLQueryStream(
     })
     .catch((err: Error) => {
       if (err.name !== 'AbortError') {
-        onError(err.message || '网络错误');
+        onError(err.message || 'Network error');
       }
       onDone();
     });

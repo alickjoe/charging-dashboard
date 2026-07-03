@@ -14,6 +14,7 @@ import { testConnection } from '../api/connections';
 import { deleteConnection } from '../api/connections-admin';
 import type { ConnectionInfo } from '../types';
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 interface ConnectionCardProps {
   connection: ConnectionInfo;
@@ -24,12 +25,13 @@ export default function ConnectionCard({ connection, onEdit }: ConnectionCardPro
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [testing, setTesting] = useState(false);
+  const { t, i18n } = useTranslation();
 
   const statusConfig: Record<string, { color: string; icon: React.ReactNode; text: string }> = {
-    connected: { color: 'green', icon: <CheckCircleOutlined />, text: '已连接' },
-    disconnected: { color: 'orange', icon: <QuestionCircleOutlined />, text: '未连接' },
-    error: { color: 'red', icon: <CloseCircleOutlined />, text: '错误' },
-    unknown: { color: 'default', icon: <QuestionCircleOutlined />, text: '未检测' },
+    connected: { color: 'green', icon: <CheckCircleOutlined />, text: t('status.connected') },
+    disconnected: { color: 'orange', icon: <QuestionCircleOutlined />, text: t('status.disconnected') },
+    error: { color: 'red', icon: <CloseCircleOutlined />, text: t('status.error') },
+    unknown: { color: 'default', icon: <QuestionCircleOutlined />, text: t('status.unknown') },
   };
 
   const status = statusConfig[connection.status] ?? statusConfig.unknown;
@@ -54,7 +56,7 @@ export default function ConnectionCard({ connection, onEdit }: ConnectionCardPro
           )
       );
     } catch {
-      message.error('测试连接失败');
+      message.error(t('msg.testFail'));
     } finally {
       setTesting(false);
     }
@@ -63,10 +65,10 @@ export default function ConnectionCard({ connection, onEdit }: ConnectionCardPro
   const handleDelete = async () => {
     try {
       await deleteConnection(connection.name);
-      message.success('连接已删除');
+      message.success(t('msg.deleted'));
       queryClient.invalidateQueries({ queryKey: ['connections'] });
     } catch (err: any) {
-      message.error(err?.response?.data?.detail || '删除失败');
+      message.error(err?.response?.data?.detail || t('msg.deleteFail'));
     }
   };
 
@@ -90,15 +92,15 @@ export default function ConnectionCard({ connection, onEdit }: ConnectionCardPro
     >
       <Space direction="vertical" style={{ width: '100%' }}>
         <div>
-          <strong>主机：</strong>{connection.host}:{connection.port}
+          <strong>{t('connection.host')}</strong>{connection.host}:{connection.port}
         </div>
         <div>
-          <strong>数据库：</strong>{connection.database}
+          <strong>{t('connection.database')}</strong>{connection.database}
         </div>
         {connection.last_checked && (
           <div>
-            <strong>上次检测：</strong>
-            {new Date(connection.last_checked).toLocaleString('zh-CN')}
+            <strong>{t('connection.lastChecked')}</strong>
+            {new Date(connection.last_checked).toLocaleString(i18n.language === 'zh' ? 'zh-CN' : 'en-US')}
           </div>
         )}
         <Space style={{ marginTop: 8 }}>
@@ -107,28 +109,28 @@ export default function ConnectionCard({ connection, onEdit }: ConnectionCardPro
             icon={<EyeOutlined />}
             onClick={handleBrowse}
           >
-            浏览数据
+            {t('connection.browse')}
           </Button>
           <Button
             icon={testing ? undefined : <ReloadOutlined />}
             onClick={handleTest}
             loading={testing}
           >
-            测试连接
+            {t('connection.test')}
           </Button>
           <Button icon={<EditOutlined />} onClick={handleEdit}>
-            编辑
+            {t('common.edit')}
           </Button>
           <Popconfirm
-            title="确定删除此连接？"
-            description="连接池将被销毁，此操作不可撤销。"
+            title={t('connection.deleteConfirm')}
+            description={t('connection.deleteDesc')}
             onConfirm={handleDelete}
-            okText="删除"
-            cancelText="取消"
+            okText={t('common.delete')}
+            cancelText={t('common.cancel')}
             okButtonProps={{ danger: true }}
           >
             <Button danger icon={<DeleteOutlined />}>
-              删除
+              {t('common.delete')}
             </Button>
           </Popconfirm>
         </Space>

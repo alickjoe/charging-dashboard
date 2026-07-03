@@ -1,6 +1,7 @@
 import { Table } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { TableDataResponse } from '../types';
+import { useTranslation } from 'react-i18next';
 
 interface DataTableProps {
   data: TableDataResponse;
@@ -9,16 +10,18 @@ interface DataTableProps {
 }
 
 export default function DataTable({ data, loading, onPageChange }: DataTableProps) {
+  const { t, i18n } = useTranslation();
+
   const columns: ColumnsType<Record<string, unknown>> = data.columns.map((col) => ({
     title: col,
     dataIndex: col,
     key: col,
     ellipsis: true,
     render: (val: unknown) => {
-      if (val === null) return <span style={{ color: '#999' }}>NULL</span>;
+      if (val === null) return <span style={{ color: '#999' }}>{t('table.null')}</span>;
       if (typeof val === 'boolean') return val ? 'true' : 'false';
       if (val instanceof Date || (typeof val === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(val))) {
-        return new Date(val as string).toLocaleString('zh-CN');
+        return new Date(val as string).toLocaleString(i18n.language === 'zh' ? 'zh-CN' : 'en-US');
       }
       return String(val);
     },
@@ -48,7 +51,7 @@ export default function DataTable({ data, loading, onPageChange }: DataTableProp
         showQuickJumper: true,
         pageSizeOptions: ['20', '50', '100', '200'],
         showTotal: (total, range) =>
-          `${range[0]}-${range[1]} / 共 ${total} 条`,
+          t('table.total', { range: `${range[0]}-${range[1]}`, total }),
         onChange: onPageChange,
       }}
     />

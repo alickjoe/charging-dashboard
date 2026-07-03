@@ -29,8 +29,10 @@ import {
 import type { Annotation } from '../types';
 import DataTable from '../components/DataTable';
 import TimeFilter from '../components/TimeFilter';
+import { useTranslation } from 'react-i18next';
 
 export default function DatabaseExplorerPage() {
+  const { t } = useTranslation();
   const { connectionName } = useParams<{ connectionName: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -155,10 +157,10 @@ export default function DatabaseExplorerPage() {
         column_name: undefined,
         annotation: editingTableAnnotation,
       });
-      message.success('表注解已保存');
+      message.success(t('msg.tableAnnotationSaved'));
       queryClient.invalidateQueries({ queryKey: annotationsQueryKey });
     } catch {
-      message.error('保存失败');
+      message.error(t('msg.saveFail'));
     } finally {
       setSavingTable(false);
     }
@@ -173,10 +175,10 @@ export default function DatabaseExplorerPage() {
         column_name: columnName,
         annotation: editingColumnAnnotations[columnName] || '',
       });
-      message.success(`字段 "${columnName}" 注解已保存`);
+      message.success(t('msg.columnAnnotationSaved', { column: columnName }));
       queryClient.invalidateQueries({ queryKey: annotationsQueryKey });
     } catch {
-      message.error('保存失败');
+      message.error(t('msg.saveFail'));
     } finally {
       setSavingColumn(null);
     }
@@ -186,7 +188,7 @@ export default function DatabaseExplorerPage() {
     if (!connectionName || !selectedTable) return;
     try {
       await deleteAnnotation(connectionName, selectedTable, columnName);
-      message.success('注解已删除');
+      message.success(t('msg.annotationDeleted'));
       queryClient.invalidateQueries({ queryKey: annotationsQueryKey });
       if (columnName) {
         setEditingColumnAnnotations((prev) => ({ ...prev, [columnName]: '' }));
@@ -194,21 +196,21 @@ export default function DatabaseExplorerPage() {
         setEditingTableAnnotation('');
       }
     } catch {
-      message.error('删除失败');
+      message.error(t('msg.deleteFail'));
     }
   };
 
   const { TextArea } = Input;
 
   if (!connectionName) {
-    return <Alert type="error" message="缺少连接名称参数" showIcon />;
+    return <Alert type="error" message={t('database.missingConnection')} showIcon />;
   }
 
   return (
     <div>
       <Breadcrumb
         items={[
-          { title: <a href="/connections">连接管理</a> },
+          { title: <a href="/connections">{t('breadcrumb.connections')}</a> },
           { title: connectionName },
         ]}
         style={{ marginBottom: 16 }}
@@ -216,7 +218,7 @@ export default function DatabaseExplorerPage() {
 
       <Space style={{ marginBottom: 16, width: '100%', justifyContent: 'space-between' }}>
         <Space>
-          <span>Schema：</span>
+          <span>{t('database.schema')}</span>
           {schemasLoading ? (
             <Spin size="small" />
           ) : (
@@ -240,7 +242,7 @@ export default function DatabaseExplorerPage() {
             icon={<BarChartOutlined />}
             onClick={handleGoToChart}
           >
-            生成图表
+            {t('database.generateChart')}
           </Button>
         )}
       </Space>
@@ -248,7 +250,7 @@ export default function DatabaseExplorerPage() {
       <div style={{ display: 'flex', gap: 16 }}>
         {/* Table List */}
         <Card
-          title={`表列表 (${tables?.length || 0})`}
+          title={t('database.tables', { count: tables?.length || 0 })}
           style={{ width: 280, flexShrink: 0 }}
           bodyStyle={{ padding: 0 }}
         >
@@ -272,7 +274,7 @@ export default function DatabaseExplorerPage() {
                   <List.Item.Meta
                     avatar={<TableOutlined />}
                     title={table.table_name}
-                    description={`~${table.row_count_estimate.toLocaleString()} 行`}
+                    description={`${t('database.rows', { count: table.row_count_estimate.toLocaleString() })}`}
                   />
                 </List.Item>
               )}
@@ -286,8 +288,8 @@ export default function DatabaseExplorerPage() {
           {!selectedTable ? (
             <Alert
               type="info"
-              message="请选择一个数据表"
-              description="从左侧列表中选择一张表来查看其结构和数据。"
+              message={t('database.selectTable')}
+              description={t('database.selectTableDesc')}
               showIcon
             />
           ) : (
@@ -296,7 +298,7 @@ export default function DatabaseExplorerPage() {
               items={[
                 {
                   key: 'structure',
-                  label: '表结构',
+                  label: t('database.structure'),
                   children: columnsLoading ? (
                     <Spin />
                   ) : (
@@ -320,7 +322,7 @@ export default function DatabaseExplorerPage() {
                 },
                 {
                   key: 'data',
-                  label: '数据浏览',
+                  label: t('database.data'),
                   children: (
                     <div>
                       <div style={{ marginBottom: 16 }}>
@@ -343,7 +345,7 @@ export default function DatabaseExplorerPage() {
                 },
                 {
                   key: 'annotations',
-                  label: '业务注解',
+                  label: t('database.annotations'),
                   children: annotationsLoading || columnsLoading ? (
                     <Spin />
                   ) : (
@@ -351,7 +353,7 @@ export default function DatabaseExplorerPage() {
                       {/* Table-level annotation */}
                       <Card
                         size="small"
-                        title="表级注解"
+                        title={t('database.tableAnnotation')}
                         style={{ marginBottom: 16 }}
                         extra={
                           <Space>
@@ -361,7 +363,7 @@ export default function DatabaseExplorerPage() {
                                 danger
                                 onClick={() => handleDeleteAnnotation()}
                               >
-                                删除
+                                {t('common.delete')}
                               </Button>
                             )}
                             <Button
@@ -370,26 +372,26 @@ export default function DatabaseExplorerPage() {
                               loading={savingTable}
                               onClick={handleSaveTableAnnotation}
                             >
-                              保存
+                              {t('common.save')}
                             </Button>
                           </Space>
                         }
                       >
                         <div>
                           <div style={{ marginBottom: 8, color: '#666', fontSize: 13 }}>
-                            为表 <Tag>{selectedTable}</Tag> 添加业务说明
+                            {t('database.addTableAnnotation', { table: selectedTable })}
                           </div>
                           <TextArea
                             value={editingTableAnnotation}
                             onChange={(e) => setEditingTableAnnotation(e.target.value)}
-                            placeholder="例如：充电站基础信息表，记录每个充电站的地理位置和额定功率"
+                            placeholder={t('database.tableAnnotationPlaceholder')}
                             rows={3}
                           />
                         </div>
                       </Card>
 
                       {/* Column-level annotations */}
-                      <Card size="small" title="字段注解">
+                      <Card size="small" title={t('database.columnAnnotation')}>
                         <div style={{ maxHeight: 400, overflowY: 'auto' }}>
                           {(columns || []).map((col) => (
                             <div
@@ -419,7 +421,7 @@ export default function DatabaseExplorerPage() {
                                       [col.column_name]: e.target.value,
                                     }))
                                   }
-                                  placeholder="输入字段的业务含义…"
+                                  placeholder={t('database.columnAnnotationPlaceholder')}
                                   size="small"
                                 />
                               </div>
@@ -432,7 +434,7 @@ export default function DatabaseExplorerPage() {
                                       handleDeleteAnnotation(col.column_name)
                                     }
                                   >
-                                    删除
+                                    {t('common.delete')}
                                   </Button>
                                 )}
                                 <Button
@@ -443,7 +445,7 @@ export default function DatabaseExplorerPage() {
                                     handleSaveColumnAnnotation(col.column_name)
                                   }
                                 >
-                                  保存
+                                  {t('common.save')}
                                 </Button>
                               </Space>
                             </div>

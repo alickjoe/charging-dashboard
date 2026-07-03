@@ -1,32 +1,17 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Layout as AntLayout, Menu, theme } from 'antd';
+import { Layout as AntLayout, Menu, Button, Space, theme } from 'antd';
 import {
   LinkOutlined,
   DatabaseOutlined,
   RobotOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
+import { useTranslation } from 'react-i18next';
+import { useLanguageStore } from '../i18n/store';
+import i18next from '../i18n';
 
 const { Sider, Content, Header } = AntLayout;
-
-const menuItems = [
-  {
-    key: '/connections',
-    icon: <LinkOutlined />,
-    label: '连接管理',
-  },
-  {
-    key: '/llm-configs',
-    icon: <RobotOutlined />,
-    label: 'AI 配置',
-  },
-  {
-    key: '/nl-query',
-    icon: <SearchOutlined />,
-    label: 'AI 查询',
-  },
-];
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -37,6 +22,27 @@ export default function Layout({ children }: LayoutProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const { token } = theme.useToken();
+  const { t } = useTranslation();
+  const language = useLanguageStore((s) => s.language);
+  const setLanguage = useLanguageStore((s) => s.setLanguage);
+
+  const menuItems = useMemo(() => [
+    {
+      key: '/connections',
+      icon: <LinkOutlined />,
+      label: t('nav.connections'),
+    },
+    {
+      key: '/llm-configs',
+      icon: <RobotOutlined />,
+      label: t('nav.aiConfig'),
+    },
+    {
+      key: '/nl-query',
+      icon: <SearchOutlined />,
+      label: t('nav.aiQuery'),
+    },
+  ], [t]);
 
   const handleMenuClick = (e: { key: string }) => {
     if (e.key.startsWith('/')) {
@@ -51,6 +57,12 @@ export default function Layout({ children }: LayoutProps) {
     if (path === '/nl-query') return ['/nl-query'];
     if (path.startsWith('/databases/') || path.startsWith('/charts/')) return ['/connections'];
     return [];
+  };
+
+  const handleToggleLanguage = () => {
+    const next = language === 'zh' ? 'en' : 'zh';
+    setLanguage(next);
+    i18next.changeLanguage(next);
   };
 
   return (
@@ -74,7 +86,7 @@ export default function Layout({ children }: LayoutProps) {
             overflow: 'hidden',
           }}
         >
-          {collapsed ? '⚡' : '充电看板'}
+          {collapsed ? t('app.brandShort') : t('app.brand')}
         </div>
         <Menu
           theme="dark"
@@ -83,6 +95,46 @@ export default function Layout({ children }: LayoutProps) {
           items={menuItems}
           onClick={handleMenuClick}
         />
+        {/* Language Switcher */}
+        <div style={{
+          position: 'absolute',
+          bottom: 0,
+          width: '100%',
+          padding: '12px',
+          borderTop: '1px solid rgba(255,255,255,0.1)',
+        }}>
+          {collapsed ? (
+            <Button
+              type="text"
+              block
+              onClick={handleToggleLanguage}
+              style={{ color: 'rgba(255,255,255,0.65)' }}
+            >
+              {language === 'zh' ? 'EN' : '中'}
+            </Button>
+          ) : (
+            <Space style={{ width: '100%', justifyContent: 'center' }}>
+              <Button
+                type={language === 'en' ? 'primary' : 'text'}
+                size="small"
+                onClick={handleToggleLanguage}
+                style={language !== 'en' ? { color: 'rgba(255,255,255,0.65)' } : undefined}
+                ghost={language === 'en'}
+              >
+                EN
+              </Button>
+              <Button
+                type={language === 'zh' ? 'primary' : 'text'}
+                size="small"
+                onClick={handleToggleLanguage}
+                style={language !== 'zh' ? { color: 'rgba(255,255,255,0.65)' } : undefined}
+                ghost={language === 'zh'}
+              >
+                中文
+              </Button>
+            </Space>
+          )}
+        </div>
       </Sider>
       <AntLayout>
         <Header
@@ -94,7 +146,7 @@ export default function Layout({ children }: LayoutProps) {
             borderBottom: `1px solid ${token.colorBorderSecondary}`,
           }}
         >
-          EV 充电桩数据看板
+          {t('app.title')}
         </Header>
         <Content
           style={{

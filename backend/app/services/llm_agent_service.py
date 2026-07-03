@@ -33,7 +33,7 @@ You have one tool: `query_database`. Use it to run SELECT queries against the da
 3. Explain your reasoning step by step before each query.
 4. After seeing query results, analyze them and explain your findings in plain language.
 5. If a query fails, try to fix it based on the error message.
-6. Write your final answer in Chinese, with clear structure and insights.
+6. Write your final answer in {language}. However, if the user's question explicitly asks you to respond in a specific language, follow the user's instruction instead.
 7. Use markdown formatting for readability.
 8. Max 5 query rounds.
 
@@ -142,19 +142,23 @@ async def run_agent_stream(
     llm_config: dict,
     question: str,
     history_messages: list | None = None,
+    language: str = "en",
 ) -> AsyncGenerator[str, None]:
     """
     Agent loop with SSE streaming output.
 
     Yields SSE-formatted strings to be consumed by StreamingResponse.
     """
+    # Map language code to display name for the system prompt
+    lang_name = "Chinese" if language == "zh" else "English"
+    
     schema_text = await _get_schema_text(pools, connection_name)
     if not schema_text or schema_text.startswith("No tables"):
         yield _sse_event("error", {"message": "目标数据库中没有找到任何表"})
         yield _sse_event("done", {"message": ""})
         return
 
-    system_prompt = AGENT_SYSTEM_PROMPT.format(schema_text=schema_text)
+    system_prompt = AGENT_SYSTEM_PROMPT.format(schema_text=schema_text, language=lang_name)
 
     api_base = llm_config["api_base"].rstrip("/")
     api_key = llm_config["api_key"]

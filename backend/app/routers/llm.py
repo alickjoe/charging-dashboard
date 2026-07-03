@@ -200,6 +200,7 @@ async def nl_query_stream(body: NLQueryRequest, request: Request):
             llm_config=llm_row,
             question=body.question,
             history_messages=history_messages if history_messages else None,
+            language=body.language,
         ):
             if sse_str.startswith("data: "):
                 try:
@@ -213,7 +214,14 @@ async def nl_query_stream(body: NLQueryRequest, request: Request):
                         break  # exit loop, persist messages, then yield done
                     etype = event.get("type", "")
                     if etype in ("think", "sql", "result", "error"):
-                        collected_blocks.append(event)
+                        # Merge consecutive think blocks to avoid content fragmentation
+                        if etype == "think" and collected_blocks and collected_blocks[-1].get("type") == "think":
+                            collected_blocks[-1]["content"] = (
+                                collected_blocks[-1].get("content", "") +
+                                event.get("content", "")
+                            )
+                        else:
+                            collected_blocks.append(event)
                 except (json.JSONDecodeError, KeyError):
                     pass
 

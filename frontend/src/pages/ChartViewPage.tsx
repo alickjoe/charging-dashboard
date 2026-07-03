@@ -17,8 +17,10 @@ import { fetchChartData } from '../api/charts';
 import ChartRenderer from '../components/ChartRenderer';
 import TimeFilter from '../components/TimeFilter';
 import type { ChartDataResponse } from '../types';
+import { useTranslation } from 'react-i18next';
 
 export default function ChartViewPage() {
+  const { t } = useTranslation();
   const { connectionName, schema, tableName } = useParams<{
     connectionName: string;
     schema: string;
@@ -75,7 +77,7 @@ export default function ChartViewPage() {
   };
 
   if (!connectionName || !tableName) {
-    return <Alert type="error" message="缺少连接名称或表名参数" showIcon />;
+    return <Alert type="error" message={t('chart.missingParams')} showIcon />;
   }
 
   const columnOptions =
@@ -90,35 +92,35 @@ export default function ChartViewPage() {
     <div>
       <Breadcrumb
         items={[
-          { title: <a href="/connections">连接管理</a> },
+          { title: <a href="/connections">{t('breadcrumb.connections')}</a> },
           {
             title: (
               <a href={`/databases/${connectionName}`}>{connectionName}</a>
             ),
           },
-          { title: `${tableName} - 图表` },
+          { title: t('chart.breadcrumbChart', { table: tableName }) },
         ]}
         style={{ marginBottom: 16 }}
       />
 
-      <Card title="图表配置" style={{ marginBottom: 16 }}>
+      <Card title={t('chart.title')} style={{ marginBottom: 16 }}>
         <Space direction="vertical" style={{ width: '100%' }} size="middle">
           <Space wrap>
-            <span>X 轴列：</span>
+            <span>{t('chart.xAxis')}</span>
             <Select
               value={xColumn}
               onChange={setXColumn}
-              placeholder="选择 X 轴列"
+              placeholder={t('chart.selectX')}
               style={{ width: 250 }}
               options={columnOptions}
               loading={columnsLoading}
               showSearch
             />
-            <span>Y 轴列：</span>
+            <span>{t('chart.yAxis')}</span>
             <Select
               value={yColumn}
               onChange={setYColumn}
-              placeholder="选择 Y 轴列 (数值)"
+              placeholder={t('chart.selectY')}
               style={{ width: 250 }}
               options={columnOptions}
               loading={columnsLoading}
@@ -127,39 +129,39 @@ export default function ChartViewPage() {
           </Space>
 
           <Space wrap>
-            <span>图表类型：</span>
+            <span>{t('chart.chartType')}</span>
             <Radio.Group value={chartType} onChange={(e) => setChartType(e.target.value)}>
-              <Radio.Button value="bar">柱状图</Radio.Button>
-              <Radio.Button value="line">折线图</Radio.Button>
+              <Radio.Button value="bar">{t('chart.bar')}</Radio.Button>
+              <Radio.Button value="line">{t('chart.line')}</Radio.Button>
             </Radio.Group>
 
-            <span>聚合方式：</span>
+            <span>{t('chart.aggregation')}</span>
             <Select
               value={aggregation}
               onChange={setAggregation}
               style={{ width: 120 }}
               options={[
-                { value: 'sum', label: '求和 SUM' },
-                { value: 'avg', label: '平均 AVG' },
-                { value: 'count', label: '计数 COUNT' },
-                { value: 'none', label: '无聚合' },
+                { value: 'sum', label: t('chart.sum') },
+                { value: 'avg', label: t('chart.avg') },
+                { value: 'count', label: t('chart.count') },
+                { value: 'none', label: t('chart.none') },
               ]}
             />
 
-            <span>分组方式：</span>
+            <span>{t('chart.groupBy')}</span>
             <Select
               value={groupBy}
               onChange={setGroupBy}
               style={{ width: 180 }}
               options={[
-                { value: 'date_trunc_day', label: '按天' },
-                { value: 'date_trunc_hour', label: '按小时' },
-                { value: 'date_trunc_month', label: '按月' },
-                { value: 'none', label: '无分组' },
+                { value: 'date_trunc_day', label: t('chart.byDay') },
+                { value: 'date_trunc_hour', label: t('chart.byHour') },
+                { value: 'date_trunc_month', label: t('chart.byMonth') },
+                { value: 'none', label: t('chart.noGrouping') },
               ]}
             />
 
-            <span>数据条数：</span>
+            <span>{t('chart.dataCount')}</span>
             <InputNumber
               value={limit}
               onChange={(v) => setLimit(v || 100)}
@@ -178,12 +180,12 @@ export default function ChartViewPage() {
             loading={chartLoading}
             disabled={!isReady}
           >
-            生成图表
+            {t('chart.generate')}
           </Button>
         </Space>
       </Card>
 
-      <Card title="图表结果">
+      <Card title={t('chart.result')}>
         <ChartRenderer
           data={chartData}
           chartType={chartType}

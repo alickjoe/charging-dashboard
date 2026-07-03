@@ -16,6 +16,8 @@ import type {
   ConnectionInfo, LLMConfig, SSEEvent,
   Conversation, ConversationDetail, ConversationMessage,
 } from '../types';
+import { useTranslation } from 'react-i18next';
+import { useLanguageStore } from '../i18n/store';
 
 const { TextArea } = Input;
 const { Paragraph, Text } = Typography;
@@ -171,7 +173,8 @@ function MiniResultTable({ columns, rows, totalRows }: {
   rows: unknown[][];
   totalRows?: number;
 }) {
-  if (!columns.length) return <Text type="secondary">查询无结果</Text>;
+  const { t } = useTranslation();
+  if (!columns.length) return <Text type="secondary">{t('chat.noResults')}</Text>;
   return (
     <div style={{ overflowX: 'auto' }}>
       <table
@@ -212,7 +215,7 @@ function MiniResultTable({ columns, rows, totalRows }: {
       </table>
       {totalRows !== undefined && totalRows > rows.length && (
         <Text type="secondary" style={{ display: 'block', marginTop: 4 }}>
-          显示前 {rows.length} 行，共 {totalRows} 行
+          {t('chat.showingRows', { shown: rows.length, total: totalRows })}
         </Text>
       )}
     </div>
@@ -222,6 +225,7 @@ function MiniResultTable({ columns, rows, totalRows }: {
 // ─── Render a single block ────────────────────────────────────────
 
 function BlockView({ block }: { block: StreamBlock }) {
+  const { t } = useTranslation();
   switch (block.type) {
     case 'think':
       return (
@@ -234,7 +238,7 @@ function BlockView({ block }: { block: StreamBlock }) {
         <div style={{ marginBottom: 16 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
             <CodeOutlined style={{ color: '#1890ff' }} />
-            <Text strong style={{ fontSize: 13 }}>SQL 查询</Text>
+            <Text strong style={{ fontSize: 13 }}>{t('block.sqlQuery')}</Text>
           </div>
           <Paragraph
             copyable
@@ -254,8 +258,8 @@ function BlockView({ block }: { block: StreamBlock }) {
         <div style={{ marginBottom: 16 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
             <TableOutlined style={{ color: '#52c41a' }} />
-            <Text strong style={{ fontSize: 13 }}>查询结果</Text>
-            {block.totalRows !== undefined && <Tag>{block.totalRows} 行</Tag>}
+            <Text strong style={{ fontSize: 13 }}>{t('block.queryResult')}</Text>
+            {block.totalRows !== undefined && <Tag>{t('block.rows', { count: block.totalRows })}</Tag>}
           </div>
           <MiniResultTable
             columns={block.columns || []}
@@ -310,6 +314,8 @@ function parseAnswerBlocks(raw: string): StreamBlock[] {
 // ─── Page Component ───────────────────────────────────────────────
 
 export default function NLQueryPage() {
+  const { t, i18n } = useTranslation();
+  const language = useLanguageStore((s) => s.language);
   const queryClient = useQueryClient();
 
   // ── Global selections (for new conversations) ──
@@ -415,6 +421,7 @@ export default function NLQueryPage() {
         llm_config_id: llmId,
         question: question.trim(),
         conversation_id: activeConvId ?? undefined,
+        language: language,
       },
       (event: SSEEvent) => {
         switch (event.type) {
@@ -530,7 +537,7 @@ export default function NLQueryPage() {
   const fmtTime = (ts: string) => {
     try {
       const d = new Date(ts + 'Z');
-      return d.toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      return d.toLocaleString(i18n.language === 'zh' ? 'zh-CN' : 'en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     } catch {
       return ts;
     }
@@ -564,7 +571,7 @@ export default function NLQueryPage() {
             block
             onClick={handleNewChat}
           >
-            新建会话
+            {t('chat.newChat')}
           </Button>
         </div>
 
@@ -576,7 +583,7 @@ export default function NLQueryPage() {
           ) : (conversations || []).length === 0 ? (
             <Empty
               image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description="暂无会话"
+              description={t('chat.noConversations')}
               style={{ marginTop: 32 }}
             />
           ) : (
@@ -607,21 +614,21 @@ export default function NLQueryPage() {
                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                     }}>
                       <MessageOutlined style={{ marginRight: 6, color: '#999' }} />
-                      {conv.title || '新会话'}
+                      {conv.title || t('chat.newConversation')}
                     </div>
                     <div style={{ fontSize: 12, color: '#999', marginTop: 2 }}>
-                      {conv.message_count} 条消息 · {fmtTime(conv.updated_at)}
+                      {t('chat.messages', { count: conv.message_count })} · {fmtTime(conv.updated_at)}
                     </div>
                   </div>
                   <Popconfirm
-                    title="确定删除此会话？"
+                    title={t('chat.deleteConfirm')}
                     onConfirm={(e) => {
                       e?.stopPropagation();
                       handleDeleteConv(conv.id);
                     }}
                     onCancel={(e) => e?.stopPropagation()}
-                    okText="删除"
-                    cancelText="取消"
+                    okText={t('common.delete')}
+                    cancelText={t('common.cancel')}
                   >
                     <Button
                       type="text"
@@ -648,17 +655,17 @@ export default function NLQueryPage() {
         }}>
           {activeConvMeta ? (
             <>
-              <Text strong style={{ fontSize: 15 }}>{activeConvMeta.title || '新会话'}</Text>
+              <Text strong style={{ fontSize: 15 }}>{activeConvMeta.title || t('chat.newConversation')}</Text>
               <Tag>{connLabel}</Tag>
               <Tag color="blue">{llmName}</Tag>
             </>
           ) : (
             <>
-              <Text strong style={{ fontSize: 15 }}>新建会话</Text>
+              <Text strong style={{ fontSize: 15 }}>{t('chat.newSession')}</Text>
               <Space wrap>
-                <span style={{ fontSize: 13, color: '#666' }}>数据库：</span>
+                <span style={{ fontSize: 13, color: '#666' }}>{t('chat.dbLabel')}</span>
                 <Select
-                  placeholder="选择数据库连接"
+                  placeholder={t('chat.selectDB')}
                   value={selectedConn}
                   onChange={(v) => setSelectedConn(v)}
                   loading={loadingConns}
@@ -667,11 +674,11 @@ export default function NLQueryPage() {
                     value: c.name,
                     label: `${c.label} (${c.database})`,
                   }))}
-                  notFoundContent={loadingConns ? <Spin size="small" /> : '无可用连接'}
+                  notFoundContent={loadingConns ? <Spin size="small" /> : t('chat.noConnections')}
                 />
-                <span style={{ fontSize: 13, color: '#666' }}>AI 模型：</span>
+                <span style={{ fontSize: 13, color: '#666' }}>{t('chat.aiModelLabel')}</span>
                 <Select
-                  placeholder="选择 AI 模型"
+                  placeholder={t('chat.selectModel')}
                   value={selectedLLM}
                   onChange={(v) => setSelectedLLM(v)}
                   loading={loadingLLMs}
@@ -680,7 +687,7 @@ export default function NLQueryPage() {
                     value: c.id,
                     label: `${c.name} (${c.model})`,
                   }))}
-                  notFoundContent={loadingLLMs ? <Spin size="small" /> : '无 LLM 配置'}
+                  notFoundContent={loadingLLMs ? <Spin size="small" /> : t('chat.noLLMConfigs')}
                 />
               </Space>
             </>
@@ -699,8 +706,8 @@ export default function NLQueryPage() {
               <BarChartOutlined style={{ fontSize: 48, marginBottom: 16 }} />
               <div style={{ fontSize: 16 }}>
                 {activeConvId
-                  ? '在下方输入问题开始对话'
-                  : '选择数据库和 AI 模型，然后输入问题开始查询'}
+                  ? t('chat.emptyContinue')
+                  : t('chat.emptyNew')}
               </div>
             </div>
           )}
@@ -708,7 +715,7 @@ export default function NLQueryPage() {
           {error && (
             <Alert
               type="error"
-              message="查询失败"
+              message={t('chat.queryFailed')}
               description={error}
               showIcon
               closable
@@ -750,7 +757,7 @@ export default function NLQueryPage() {
                       <BlockView key={block.key} block={block} />
                     ))}
                     {msg.llm_time_ms && (
-                      <Tag color="blue" style={{ marginTop: 4 }}>LLM 耗时: {msg.llm_time_ms}ms</Tag>
+                      <Tag color="blue" style={{ marginTop: 4 }}>{t('chat.llmTime', { time: msg.llm_time_ms })}</Tag>
                     )}
                   </div>
                 </div>
@@ -794,7 +801,7 @@ export default function NLQueryPage() {
                     <div style={{ marginBottom: 16 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                         <Spin size="small" />
-                        <Text type="secondary" style={{ fontSize: 13 }}>思考中...</Text>
+                        <Text type="secondary" style={{ fontSize: 13 }}>{t('block.thinking')}</Text>
                       </div>
                       <RenderMarkdown text={streamingThink} />
                     </div>
@@ -802,21 +809,21 @@ export default function NLQueryPage() {
 
                   {querying && streamingBlocks.length === 0 && !streamingThink && (
                     <div style={{ textAlign: 'center', padding: 16 }}>
-                      <Spin size="small" tip="AI 正在思考……" />
+                      <Spin size="small" tip={t('block.aiThinking')} />
                     </div>
                   )}
 
                   {doneMessage && !querying && (
                     <div style={{ marginBottom: 16 }}>
                       <div style={{ marginBottom: 4 }}>
-                        <Tag color="success">分析完成</Tag>
+                        <Tag color="success">{t('block.analysisDone')}</Tag>
                       </div>
                       <RenderMarkdown text={doneMessage} />
                     </div>
                   )}
 
                   {llmTime && (
-                    <Tag color="blue" style={{ marginTop: 4 }}>LLM 耗时: {llmTime}ms</Tag>
+                    <Tag color="blue" style={{ marginTop: 4 }}>{t('chat.llmTime', { time: llmTime })}</Tag>
                   )}
                 </div>
               </div>
@@ -835,8 +842,8 @@ export default function NLQueryPage() {
             <TextArea
               placeholder={
                 activeConvId
-                  ? '继续输入问题... (Enter 发送，Shift+Enter 换行)'
-                  : '用自然语言描述你想查询的数据...'
+                  ? t('chat.placeholderContinue')
+                  : t('chat.placeholderNew')
               }
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
@@ -855,7 +862,7 @@ export default function NLQueryPage() {
               disabled={!querying && !canSend}
               style={{ height: 'auto', minHeight: 52 }}
             >
-              {querying ? '停止' : '发送'}
+              {querying ? t('chat.stop') : t('chat.send')}
             </Button>
           </Space.Compact>
         </div>

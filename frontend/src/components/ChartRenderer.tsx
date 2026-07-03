@@ -12,6 +12,7 @@ import {
 } from 'recharts';
 import type { ChartDataResponse } from '../types';
 import type React from 'react';
+import { useTranslation } from 'react-i18next';
 
 interface ChartRendererProps {
   data: ChartDataResponse | null;
@@ -20,10 +21,12 @@ interface ChartRendererProps {
 }
 
 export default function ChartRenderer({ data, chartType, loading }: ChartRendererProps) {
+  const { t } = useTranslation();
+
   if (loading) {
     return (
       <div style={{ textAlign: 'center', padding: 80, color: '#999' }}>
-        加载中...
+        {t('chart.loading')}
       </div>
     );
   }
@@ -31,7 +34,7 @@ export default function ChartRenderer({ data, chartType, loading }: ChartRendere
   if (!data || data.labels.length === 0) {
     return (
       <div style={{ textAlign: 'center', padding: 80, color: '#999' }}>
-        暂无图表数据，请选择列并生成图表
+        {t('chart.noData')}
       </div>
     );
   }
