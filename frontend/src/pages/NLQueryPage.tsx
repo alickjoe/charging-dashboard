@@ -35,20 +35,132 @@ interface StreamBlock {
 
 // ─── Markdown Renderer ────────────────────────────────────────────
 
+// ─── Markdown Helpers ────────────────────────────────────────────
+
+/** Check if a line is a markdown table separator row (e.g. |---|---|) */
+function isTableSeparator(line: string): boolean {
+  const trimmed = line.trim();
+  return /^\|[-: ]+\|$/.test(trimmed) && trimmed.includes('-');
+}
+
+/** Parse a table row into cell values, stripping leading/trailing pipes */
+function parseTableRow(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\||\|$/g, '')
+    .split('|')
+    .map(cell => cell.trim());
+}
+
+/** Find the end line of a table block starting at `start`. Returns `start` if not a valid table. */
+function findTableEnd(lines: string[], start: number): number {
+  let end = start;
+  while (
+    end < lines.length &&
+    lines[end].trimStart().startsWith('|') &&
+    lines[end].trimEnd().endsWith('|')
+  ) {
+    end++;
+  }
+  if (end - start >= 2 && isTableSeparator(lines[start + 1])) {
+    return end;
+  }
+  return start;
+}
+
+// ─── Markdown Renderer with Table Support ─────────────────────────
+
 function RenderMarkdown({ text }: { text: string }) {
-  const parts = text.split(/(\*\*.*?\*\*|`.*?`|\n)/g);
-  return (
-    <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-      {parts.map((part, i) => {
-        if (part === '\n') return <br key={i} />;
-        if (part.startsWith('**') && part.endsWith('**'))
-          return <strong key={i}>{part.slice(2, -2)}</strong>;
-        if (part.startsWith('`') && part.endsWith('`'))
-          return <Text key={i} code>{part.slice(1, -1)}</Text>;
-        return <span key={i}>{part}</span>;
-      })}
-    </div>
-  );
+  if (!text.trim()) return null;
+
+  const lines = text.split('\n');
+  const nodes: React.ReactNode[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    // Check if current line could start a table
+    const curLine = lines[i];
+    if (curLine.trimStart().startsWith('|') && curLine.trimEnd().endsWith('|')) {
+      const tableEnd = findTableEnd(lines, i);
+      if (tableEnd > i) {
+        // Valid markdown table found
+        const headers = parseTableRow(lines[i]);
+        const dataRows = lines.slice(i + 2, tableEnd).map(parseTableRow);
+        const maxCols = Math.max(headers.length, ...dataRows.map(r => r.length));
+
+        nodes.push(
+          <div key={`tbl-${i}`} style={{ overflowX: 'auto', marginBottom: 12 }}>
+            <table style={{
+              borderCollapse: 'collapse', width: '100%',
+              fontSize: 13, fontFamily: 'monospace',
+            }}>
+              <thead>
+                <tr style={{ background: '#f0f0f0' }}>
+                  {Array.from({ length: maxCols }).map((_, ci) => (
+                    <th key={ci} style={{
+                      border: '1px solid #ddd', padding: '4px 8px',
+                      textAlign: 'left', fontWeight: 600,
+                    }}>
+                      {headers[ci] || ''}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {dataRows.map((row, ri) => (
+                  <tr key={ri}>
+                    {Array.from({ length: maxCols }).map((_, ci) => (
+                      <td key={ci} style={{
+                        border: '1px solid #eee', padding: '2px 8px',
+                        maxWidth: 300, overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                      }}>
+                        {row[ci] || ''}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+
+        i = tableEnd;
+        continue;
+      }
+    }
+
+    // Not a table — collect consecutive non-table lines as a text block
+    const textStart = i;
+    i++;
+    while (i < lines.length) {
+      const l = lines[i];
+      if (l.trimStart().startsWith('|') && l.trimEnd().endsWith('|')) {
+        const peek = findTableEnd(lines, i);
+        if (peek > i) break; // Next line starts a table
+      }
+      i++;
+    }
+
+    const textBlock = lines.slice(textStart, i).join('\n');
+    if (textBlock.trim()) {
+      const parts = textBlock.split(/(\*\*.*?\*\*|`.*?`|\n)/g);
+      nodes.push(
+        <div key={`txt-${textStart}`} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+          {parts.map((part, pi) => {
+            if (part === '\n') return <br key={pi} />;
+            if (part.startsWith('**') && part.endsWith('**'))
+              return <strong key={pi}>{part.slice(2, -2)}</strong>;
+            if (part.startsWith('`') && part.endsWith('`'))
+              return <Text key={pi} code>{part.slice(1, -1)}</Text>;
+            return <span key={pi}>{part}</span>;
+          })}
+        </div>
+      );
+    }
+  }
+
+  return <div>{nodes}</div>;
 }
 
 // ─── Mini Result Table ────────────────────────────────────────────
@@ -235,7 +347,9 @@ export default function NLQueryPage() {
       setActiveConvMeta(null);
       return;
     }
+    let cancelled = false;
     fetchConversationDetail(activeConvId).then((detail) => {
+      if (cancelled) return;
       setMessages(detail.messages || []);
       setActiveConvMeta({
         id: detail.id,
@@ -247,8 +361,9 @@ export default function NLQueryPage() {
         updated_at: detail.updated_at,
       });
     }).catch(() => {
-      setMessages([]);
+      if (!cancelled) setMessages([]);
     });
+    return () => { cancelled = true; };
   }, [activeConvId]);
 
   // ── Auto-scroll ──
@@ -384,6 +499,7 @@ export default function NLQueryPage() {
       setQuerying(false);
     }
     setActiveConvId(conv.id);
+    setMessages([]);
     resetStreamState();
     setQuestion('');
   };
@@ -616,6 +732,8 @@ export default function NLQueryPage() {
                     borderRadius: '12px 12px 12px 4px',
                     padding: '12px 16px',
                     boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
+                    overflowX: 'auto',
+                    minWidth: 0,
                   }}>
                     {parseAnswerBlocks(msg.answer_blocks).map((block) => (
                       <BlockView key={block.key} block={block} />
@@ -654,6 +772,8 @@ export default function NLQueryPage() {
                   borderRadius: '12px 12px 12px 4px',
                   padding: '12px 16px',
                   boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
+                  overflowX: 'auto',
+                  minWidth: 0,
                 }}>
                   {streamingBlocks.map((block) => (
                     <BlockView key={block.key} block={block} />
