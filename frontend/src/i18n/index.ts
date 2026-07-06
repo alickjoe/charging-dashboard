@@ -30,6 +30,8 @@ i18next
     defaultNS: 'translation',
     interpolation: {
       escapeValue: false,
+      prefix: '{',
+      suffix: '}',
     },
   });
 
