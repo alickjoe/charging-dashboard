@@ -14,11 +14,13 @@ from app.sqlite_store import AnnotationStore
 
 logger = logging.getLogger(__name__)
 
-AGENT_SYSTEM_PROMPT = """You are a data analyst with read-only access to a PostgreSQL database. Your job is to answer the user's question by exploring and analyzing the data.
+AGENT_SYSTEM_PROMPT = """## CRITICAL LANGUAGE REQUIREMENT
 
-## Language Requirement
+YOU MUST WRITE ALL YOUR OUTPUT IN {language}. This includes your reasoning, step-by-step thinking, analysis, explanations, and final answer. The user's question language is irrelevant — you reply in {language} ALWAYS.
 
-You MUST communicate entirely in {language}. All your reasoning, step-by-step analysis, explanations, tool-calling decisions, and final answers must be written in {language}. The only exception: if the user's question explicitly specifies a different language, follow that instruction instead.
+---
+
+You are a data analyst with read-only access to a PostgreSQL database. Your job is to answer the user's question by exploring and analyzing the data.
 
 ## Available Tool
 
@@ -39,7 +41,7 @@ You have one tool: `query_database`. Use it to run SELECT queries against the da
 5. If a query fails, try to fix it based on the error message.
 6. Use markdown formatting for readability.
 7. Max 5 query rounds.
-8. Obey the Language Requirement above — all your output must be in {language}.
+8. REMINDER: All output must be in {language}. This is non-negotiable.
 
 ## Database Schema
 
@@ -66,8 +68,10 @@ TOOL_DEFINITION = {
 MAX_ROUNDS = 50
 
 
-async def _get_schema_text(pools: dict, connection_name: str) -> str:
+async def _get_schema_text(pools: dict, connection_name: str, language: str = "en") -> str:
     """Build a text description of the database schema, including business annotations."""
+    # Language-aware labels
+    anno_label = "业务说明" if language == "zh" else "Business Description"
     try:
         schemas = await list_schemas(pools, connection_name)
     except Exception:
@@ -112,7 +116,7 @@ async def _get_schema_text(pools: dict, connection_name: str) -> str:
             table_header = f'Table "{schema}"."{table_name}" (~{row_est} rows):'
             table_anno = table_annotations.get(table_name, "")
             if table_anno:
-                table_header += f" -- 业务说明: {table_anno}"
+                table_header += f" -- {anno_label}: {table_anno}"
             lines.append(table_header + "\n" + "\n".join(col_lines))
 
     if not lines:
@@ -156,7 +160,7 @@ async def run_agent_stream(
     # Map language code to display name for the system prompt
     lang_name = "Chinese" if language == "zh" else "English"
     
-    schema_text = await _get_schema_text(pools, connection_name)
+    schema_text = await _get_schema_text(pools, connection_name, language)
     if not schema_text or schema_text.startswith("No tables"):
         yield _sse_event("error", {"message": "目标数据库中没有找到任何表"})
         yield _sse_event("done", {"message": ""})
@@ -174,7 +178,9 @@ async def run_agent_stream(
         for msg in history_messages:
             if msg.get("role") != "system":
                 messages.append(msg)
-    messages.append({"role": "user", "content": question})
+    # Inject language directive into user message for double enforcement
+    # (multi-system-message not used due to API compatibility concerns)
+    messages.append({"role": "user", "content": f"[Language directive: respond in {lang_name}.] {question}"})
 
     async with httpx.AsyncClient(timeout=120, verify=False) as client:
         for _round in range(MAX_ROUNDS):

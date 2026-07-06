@@ -377,6 +377,13 @@ export default function NLQueryPage() {
         created_at: detail.created_at,
         updated_at: detail.updated_at,
       });
+      // Clear streaming state now that DB messages are loaded
+      setStreamingBlocks([]);
+      setStreamingThink('');
+      setDoneMessage('');
+      setLlmTime(null);
+      setError(null);
+      blockKeyRef.current = 0;
     }).catch(() => {
       if (!cancelled) setMessages([]);
     });

@@ -460,7 +460,7 @@ class ConversationStore:
             conn = _get_conn()
             try:
                 rows = conn.execute(
-                    """SELECT c.*, COUNT(cm.id) as message_count
+                    """SELECT c.*, COUNT(CASE WHEN cm.role = 'user' THEN 1 END) as message_count
                        FROM conversations c
                        LEFT JOIN conversation_messages cm ON cm.conversation_id = c.id
                        GROUP BY c.id
