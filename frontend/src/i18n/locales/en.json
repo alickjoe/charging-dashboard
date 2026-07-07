@@ -215,7 +215,11 @@
     "queryError": "Query execution failed",
     "noQueries": "No saved queries",
     "deleteConfirm": "Confirm delete this query?",
-    "nameRequired": "Please enter a query name"
+    "nameRequired": "Please enter a query name",
+    "autocompleteSchema": "Schema",
+    "autocompleteTable": "Table",
+    "autocompleteColumn": "Column",
+    "autocompleteKeyword": "Keyword"
   },
   "validation": {
     "required": "This field is required",

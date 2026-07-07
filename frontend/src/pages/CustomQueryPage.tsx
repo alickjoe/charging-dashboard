@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -14,6 +14,7 @@ import {
   message,
   Popconfirm,
   Typography,
+  Tag,
 } from 'antd';
 import {
   PlayCircleOutlined,
@@ -28,8 +29,9 @@ import {
   createSavedQuery,
   updateSavedQuery,
   deleteSavedQuery,
+  fetchAutocomplete,
 } from '../api/customQuery';
-import type { CustomQueryResponse, SavedQuery } from '../types';
+import type { CustomQueryResponse, SavedQuery, AutocompleteSuggestion } from '../types';
 import { useTranslation } from 'react-i18next';
 
 const { TextArea } = Input;
@@ -49,6 +51,14 @@ export default function CustomQueryPage() {
   const [result, setResult] = useState<CustomQueryResponse | null>(null);
   const [queryError, setQueryError] = useState<string | null>(null);
 
+  // Autocomplete state
+  const [autocompleteVisible, setAutocompleteVisible] = useState(false);
+  const [suggestions, setSuggestions] = useState<AutocompleteSuggestion[]>([]);
+  const [activeSuggestionIdx, setActiveSuggestionIdx] = useState(0);
+  const textareaRef = useRef<any>(null);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cursorRef = useRef(0);
+
   const savedQueriesKey = ['savedQueries', connectionName];
 
   const { data: savedQueries, isLoading: queriesLoading } = useQuery({
@@ -58,6 +68,7 @@ export default function CustomQueryPage() {
   });
 
   const handleExecute = useCallback(async () => {
+    setAutocompleteVisible(false);
     if (!sql.trim()) return;
     setExecuting(true);
     setQueryError(null);
@@ -128,6 +139,7 @@ export default function CustomQueryPage() {
     setCurrentQueryId(null);
     setResult(null);
     setQueryError(null);
+    setAutocompleteVisible(false);
   }, []);
 
   const handleLoadQuery = useCallback((query: SavedQuery) => {
@@ -154,7 +166,72 @@ export default function CustomQueryPage() {
     [connectionName, currentQueryId, queryClient, savedQueriesKey, t]
   );
 
-  // Keyboard shortcut: Ctrl+Enter to execute
+  // ─── Autocomplete helpers ───────────────────────────────────────
+
+  const extractWordBeforeCursor = useCallback(
+    (text: string, cursorPos: number): string => {
+      let start = cursorPos - 1;
+      while (start >= 0) {
+        const ch = text[start];
+        if (/[\s\(\),;\[\]'"`]/.test(ch)) break;
+        start--;
+      }
+      return text.slice(start + 1, cursorPos);
+    },
+    []
+  );
+
+  const triggerAutocomplete = useCallback(() => {
+    if (!connectionName) return;
+    const el = textareaRef.current?.resizableTextArea?.textArea;
+    if (!el) return;
+    const text = el.value;
+    const cursorPos = el.selectionStart;
+    cursorRef.current = cursorPos;
+    const word = extractWordBeforeCursor(text, cursorPos);
+    if (!word) {
+      setAutocompleteVisible(false);
+      return;
+    }
+    fetchAutocomplete(connectionName, word, text).then((res) => {
+      if (res.suggestions.length > 0) {
+        setSuggestions(res.suggestions);
+        setActiveSuggestionIdx(0);
+        setAutocompleteVisible(true);
+      } else {
+        setAutocompleteVisible(false);
+      }
+    }).catch(() => {
+      setAutocompleteVisible(false);
+    });
+  }, [connectionName, extractWordBeforeCursor]);
+
+  const applySuggestion = useCallback(
+    (suggestion: AutocompleteSuggestion) => {
+      const el = textareaRef.current?.resizableTextArea?.textArea;
+      if (!el) return;
+      const text = el.value;
+      const cursorPos = cursorRef.current;
+      const word = extractWordBeforeCursor(text, cursorPos);
+      const before = text.slice(0, cursorPos - word.length);
+      const after = text.slice(cursorPos);
+      const newText = before + suggestion.text + after;
+      setSql(newText);
+      setAutocompleteVisible(false);
+      // Restore cursor position after React re-render
+      setTimeout(() => {
+        const el2 = textareaRef.current?.resizableTextArea?.textArea;
+        if (el2) {
+          const newPos = before.length + suggestion.text.length;
+          el2.setSelectionRange(newPos, newPos);
+          el2.focus();
+        }
+      }, 0);
+    },
+    [extractWordBeforeCursor]
+  );
+
+  // ─── Keyboard shortcut: Ctrl+Enter to execute ───────────────────
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.ctrlKey && e.key === 'Enter') {
@@ -303,18 +380,110 @@ export default function CustomQueryPage() {
             />
 
             {/* SQL Editor */}
-            <TextArea
-              value={sql}
-              onChange={(e) => setSql(e.target.value)}
-              placeholder={t('customQuery.sqlPlaceholder')}
-              rows={10}
-              style={{
-                fontFamily:
-                  'Consolas, "Courier New", monospace',
-                fontSize: 13,
-                lineHeight: 1.6,
-              }}
-            />
+            <div style={{ position: 'relative' }}>
+              <TextArea
+                ref={textareaRef}
+                value={sql}
+                onChange={(e) => {
+                  setSql(e.target.value);
+                  cursorRef.current = e.target.selectionStart;
+                  // Debounce autocomplete
+                  if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+                  debounceTimerRef.current = setTimeout(triggerAutocomplete, 300);
+                }}
+                onKeyDown={(e) => {
+                  if (!autocompleteVisible) return;
+                  const key = (e as any).nativeEvent?.key || e.key;
+                  if (key === 'ArrowDown') {
+                    e.preventDefault();
+                    setActiveSuggestionIdx((prev) =>
+                      prev < suggestions.length - 1 ? prev + 1 : 0
+                    );
+                  } else if (key === 'ArrowUp') {
+                    e.preventDefault();
+                    setActiveSuggestionIdx((prev) =>
+                      prev > 0 ? prev - 1 : suggestions.length - 1
+                    );
+                  } else if (key === 'Enter' || key === 'Tab') {
+                    e.preventDefault();
+                    if (suggestions[activeSuggestionIdx]) {
+                      applySuggestion(suggestions[activeSuggestionIdx]);
+                    }
+                  } else if (key === 'Escape') {
+                    e.preventDefault();
+                    setAutocompleteVisible(false);
+                  }
+                }}
+                placeholder={t('customQuery.sqlPlaceholder')}
+                rows={10}
+                style={{
+                  fontFamily:
+                    'Consolas, "Courier New", monospace',
+                  fontSize: 13,
+                  lineHeight: 1.6,
+                }}
+              />
+              {/* Autocomplete dropdown */}
+              {autocompleteVisible && suggestions.length > 0 && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    bottom: 4,
+                    left: 4,
+                    right: 4,
+                    maxHeight: 180,
+                    overflow: 'auto',
+                    background: '#fff',
+                    border: '1px solid #d9d9d9',
+                    borderRadius: 6,
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.12)',
+                    zIndex: 1050,
+                  }}
+                >
+                  {suggestions.map((s, idx) => (
+                    <div
+                      key={`${s.type}-${s.text}`}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        applySuggestion(s);
+                      }}
+                      style={{
+                        padding: '4px 12px',
+                        cursor: 'pointer',
+                        fontSize: 13,
+                        fontFamily: 'Consolas, "Courier New", monospace',
+                        background: idx === activeSuggestionIdx ? '#e6f4ff' : undefined,
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                      }}
+                    >
+                      <span>{s.text}</span>
+                      <Tag
+                        color={
+                          s.type === 'schema'
+                            ? 'blue'
+                            : s.type === 'table'
+                            ? 'green'
+                            : s.type === 'column'
+                            ? 'orange'
+                            : 'default'
+                        }
+                        style={{ margin: 0, fontSize: 10, lineHeight: '16px' }}
+                      >
+                        {s.type === 'schema'
+                          ? t('customQuery.autocompleteSchema')
+                          : s.type === 'table'
+                          ? t('customQuery.autocompleteTable')
+                          : s.type === 'column'
+                          ? t('customQuery.autocompleteColumn')
+                          : t('customQuery.autocompleteKeyword')}
+                      </Tag>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
 
             {/* Action Buttons */}
             <Space>
@@ -361,7 +530,7 @@ export default function CustomQueryPage() {
             {result && (
               <Card
                 size="small"
-                title={`${t('block.queryResult')} (${result.rows.length} ${t('block.rows')})`}
+                title={`${t('block.queryResult')} (${t('block.rows', { count: result.rows.length })})`}
                 extra={
                   <Text type="secondary">
                     {t('customQuery.execTime', {

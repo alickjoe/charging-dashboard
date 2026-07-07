@@ -215,7 +215,11 @@
     "queryError": "查询执行失败",
     "noQueries": "暂无保存的查询",
     "deleteConfirm": "确定删除此查询？",
-    "nameRequired": "请输入查询名称"
+    "nameRequired": "请输入查询名称",
+    "autocompleteSchema": "架构",
+    "autocompleteTable": "表",
+    "autocompleteColumn": "字段",
+    "autocompleteKeyword": "关键字"
   },
   "validation": {
     "required": "此项为必填",

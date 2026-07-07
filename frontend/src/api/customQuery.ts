@@ -5,6 +5,7 @@ import type {
   SavedQuery,
   SavedQueryCreate,
   SavedQueryUpdate,
+  AutocompleteResponse,
 } from '../types';
 
 export async function executeCustomQuery(
@@ -55,4 +56,16 @@ export async function deleteSavedQuery(
   id: number
 ): Promise<void> {
   await api.delete(`/connections/${connectionName}/queries/${id}`);
+}
+
+export async function fetchAutocomplete(
+  connectionName: string,
+  prefix: string,
+  sql?: string
+): Promise<AutocompleteResponse> {
+  const { data } = await api.get<AutocompleteResponse>(
+    `/connections/${connectionName}/autocomplete`,
+    { params: { prefix, sql } }
+  );
+  return data;
 }

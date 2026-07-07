@@ -1,6 +1,6 @@
 """Pydantic schemas for custom SQL query execution and saved queries."""
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -32,3 +32,12 @@ class SavedQueryResponse(BaseModel):
     sql_text: str
     created_at: str
     updated_at: str
+
+
+class AutocompleteSuggestion(BaseModel):
+    text: str
+    type: Literal["schema", "table", "column", "keyword"]
+
+
+class AutocompleteResponse(BaseModel):
+    suggestions: list[AutocompleteSuggestion]

@@ -219,3 +219,12 @@ export interface SavedQueryUpdate {
   name: string;
   sql_text: string;
 }
+
+export interface AutocompleteSuggestion {
+  text: string;
+  type: 'schema' | 'table' | 'column' | 'keyword';
+}
+
+export interface AutocompleteResponse {
+  suggestions: AutocompleteSuggestion[];
+}
