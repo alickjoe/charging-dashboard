@@ -76,6 +76,18 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
     raw_messages    TEXT NOT NULL DEFAULT '[]',
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS saved_queries (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    connection_name TEXT NOT NULL,
+    name            TEXT NOT NULL,
+    sql_text        TEXT NOT NULL,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_saved_queries_unique
+ON saved_queries(connection_name, name);
 """
 
 
@@ -582,6 +594,92 @@ class ConversationStore:
                 if row and row["raw_messages"]:
                     return _json.loads(row["raw_messages"])
                 return []
+            finally:
+                conn.close()
+        return await asyncio.to_thread(_do)
+
+
+class SavedQueryStore:
+    """CRUD operations for saved_queries."""
+
+    @staticmethod
+    async def list_by_connection(connection_name: str) -> list[dict]:
+        def _do():
+            conn = _get_conn()
+            try:
+                rows = conn.execute(
+                    "SELECT * FROM saved_queries WHERE connection_name = ? ORDER BY updated_at DESC",
+                    (connection_name,),
+                ).fetchall()
+                return [dict(r) for r in rows]
+            finally:
+                conn.close()
+        return await asyncio.to_thread(_do)
+
+    @staticmethod
+    async def get_by_id(id: int) -> Optional[dict]:
+        def _do():
+            conn = _get_conn()
+            try:
+                row = conn.execute(
+                    "SELECT * FROM saved_queries WHERE id = ?", (id,)
+                ).fetchone()
+                return dict(row) if row else None
+            finally:
+                conn.close()
+        return await asyncio.to_thread(_do)
+
+    @staticmethod
+    async def create(connection_name: str, name: str, sql_text: str) -> dict:
+        def _do():
+            conn = _get_conn()
+            try:
+                conn.execute(
+                    "INSERT INTO saved_queries (connection_name, name, sql_text) VALUES (?, ?, ?)",
+                    (connection_name, name, sql_text),
+                )
+                conn.commit()
+                row = conn.execute(
+                    "SELECT * FROM saved_queries WHERE id = last_insert_rowid()"
+                ).fetchone()
+                return dict(row)
+            finally:
+                conn.close()
+        return await asyncio.to_thread(_do)
+
+    @staticmethod
+    async def update(id: int, name: str, sql_text: str) -> Optional[dict]:
+        def _do():
+            conn = _get_conn()
+            try:
+                existing = conn.execute(
+                    "SELECT * FROM saved_queries WHERE id = ?", (id,)
+                ).fetchone()
+                if not existing:
+                    return None
+                conn.execute(
+                    "UPDATE saved_queries SET name = ?, sql_text = ?, updated_at = datetime('now') WHERE id = ?",
+                    (name, sql_text, id),
+                )
+                conn.commit()
+                row = conn.execute(
+                    "SELECT * FROM saved_queries WHERE id = ?", (id,)
+                ).fetchone()
+                return dict(row)
+            finally:
+                conn.close()
+        return await asyncio.to_thread(_do)
+
+    @staticmethod
+    async def delete(id: int) -> bool:
+        def _do():
+            conn = _get_conn()
+            try:
+                cur = conn.execute(
+                    "DELETE FROM saved_queries WHERE id = ?", (id,)
+                )
+                conn.commit()
+                return cur.rowcount > 0
             finally:
                 conn.close()
         return await asyncio.to_thread(_do)

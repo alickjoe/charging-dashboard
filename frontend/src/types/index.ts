@@ -188,3 +188,34 @@ export interface ConversationMessage {
 export interface ConversationDetail extends Conversation {
   messages: ConversationMessage[];
 }
+
+// ─── Custom Query ───────────────────────────────────────────────
+
+export interface CustomQueryRequest {
+  sql: string;
+}
+
+export interface CustomQueryResponse {
+  columns: string[];
+  rows: unknown[][];
+  execution_time_ms: number;
+}
+
+export interface SavedQuery {
+  id: number;
+  connection_name: string;
+  name: string;
+  sql_text: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SavedQueryCreate {
+  name: string;
+  sql_text: string;
+}
+
+export interface SavedQueryUpdate {
+  name: string;
+  sql_text: string;
+}

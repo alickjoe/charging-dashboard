@@ -197,7 +197,25 @@
     "operationFail": "操作失败",
     "tableAnnotationSaved": "表注解已保存",
     "columnAnnotationSaved": "字段 \"{column}\" 注解已保存",
-    "annotationDeleted": "注解已删除"
+    "annotationDeleted": "注解已删除",
+    "queryNameRequired": "请输入查询名称"
+  },
+  "customQuery": {
+    "title": "SQL 查询",
+    "editor": "查询编辑器",
+    "savedQueries": "已保存查询",
+    "queryName": "查询名称",
+    "queryNamePlaceholder": "输入查询名称…",
+    "sqlPlaceholder": "输入 SQL 查询语句...\n如: SELECT * FROM \"public\".\"table_name\" LIMIT 100",
+    "execute": "执行",
+    "save": "保存",
+    "saveAs": "另存为",
+    "newQuery": "新查询",
+    "execTime": "执行耗时: {time}ms",
+    "queryError": "查询执行失败",
+    "noQueries": "暂无保存的查询",
+    "deleteConfirm": "确定删除此查询？",
+    "nameRequired": "请输入查询名称"
   },
   "validation": {
     "required": "此项为必填",

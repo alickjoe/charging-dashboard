@@ -7,6 +7,7 @@ import {
   EyeOutlined,
   EditOutlined,
   DeleteOutlined,
+  CodeOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
@@ -80,6 +81,10 @@ export default function ConnectionCard({ connection, onEdit }: ConnectionCardPro
     navigate(`/databases/${connection.name}`);
   };
 
+  const handleQuery = () => {
+    navigate(`/queries/${connection.name}`);
+  };
+
   return (
     <Card
       title={connection.label}
@@ -110,6 +115,12 @@ export default function ConnectionCard({ connection, onEdit }: ConnectionCardPro
             onClick={handleBrowse}
           >
             {t('connection.browse')}
+          </Button>
+          <Button
+            icon={<CodeOutlined />}
+            onClick={handleQuery}
+          >
+            {t('customQuery.title')}
           </Button>
           <Button
             icon={testing ? undefined : <ReloadOutlined />}

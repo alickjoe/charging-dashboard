@@ -16,7 +16,7 @@ import {
   Input,
   message,
 } from 'antd';
-import { BarChartOutlined, TableOutlined } from '@ant-design/icons';
+import { BarChartOutlined, TableOutlined, CodeOutlined } from '@ant-design/icons';
 import {
   fetchSchemas,
   fetchTables,
@@ -97,6 +97,12 @@ export default function DatabaseExplorerPage() {
   const handleGoToChart = () => {
     if (connectionName && selectedTable) {
       navigate(`/charts/${connectionName}/${selectedSchema}/${selectedTable}`);
+    }
+  };
+
+  const handleGoToQuery = () => {
+    if (connectionName) {
+      navigate(`/queries/${connectionName}`);
     }
   };
 
@@ -245,6 +251,12 @@ export default function DatabaseExplorerPage() {
             {t('database.generateChart')}
           </Button>
         )}
+        <Button
+          icon={<CodeOutlined />}
+          onClick={handleGoToQuery}
+        >
+          {t('customQuery.title')}
+        </Button>
       </Space>
 
       <div style={{ display: 'flex', gap: 16 }}>

@@ -197,7 +197,25 @@
     "operationFail": "Operation failed",
     "tableAnnotationSaved": "Table annotation saved",
     "columnAnnotationSaved": "Column \"{column}\" annotation saved",
-    "annotationDeleted": "Annotation deleted"
+    "annotationDeleted": "Annotation deleted",
+    "queryNameRequired": "Please enter a query name"
+  },
+  "customQuery": {
+    "title": "SQL Query",
+    "editor": "Query Editor",
+    "savedQueries": "Saved Queries",
+    "queryName": "Query Name",
+    "queryNamePlaceholder": "Enter query name...",
+    "sqlPlaceholder": "Enter SQL query...\ne.g. SELECT * FROM \"public\".\"table_name\" LIMIT 100",
+    "execute": "Execute",
+    "save": "Save",
+    "saveAs": "Save As",
+    "newQuery": "New Query",
+    "execTime": "Execution time: {time}ms",
+    "queryError": "Query execution failed",
+    "noQueries": "No saved queries",
+    "deleteConfirm": "Confirm delete this query?",
+    "nameRequired": "Please enter a query name"
   },
   "validation": {
     "required": "This field is required",
