@@ -51,6 +51,7 @@ class NLQueryRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000)
     conversation_id: Optional[int] = None
     language: str = "en"  # UI language for AI response: 'en' or 'zh'
+    skill_ids: Optional[list[int]] = None  # Skill IDs to augment system prompt
 
 
 class NLQueryResponse(BaseModel):

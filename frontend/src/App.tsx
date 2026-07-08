@@ -6,6 +6,7 @@ import ChartViewPage from './pages/ChartViewPage';
 import LLMConfigPage from './pages/LLMConfigPage';
 import NLQueryPage from './pages/NLQueryPage';
 import CustomQueryPage from './pages/CustomQueryPage';
+import SkillsPage from './pages/SkillsPage';
 
 function App() {
   return (
@@ -18,6 +19,7 @@ function App() {
         <Route path="/databases/:connectionName" element={<DatabaseExplorerPage />} />
         <Route path="/charts/:connectionName/:schema/:tableName" element={<ChartViewPage />} />
                 <Route path="/queries/:connectionName" element={<CustomQueryPage />} />
+                <Route path="/skills" element={<SkillsPage />} />
       </Routes>
     </Layout>
   );

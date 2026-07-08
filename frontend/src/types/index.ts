@@ -138,6 +138,7 @@ export interface NLQueryRequest {
   question: string;
   conversation_id?: number;
   language?: string;
+  skill_ids?: number[];
 }
 
 export interface NLQueryResponse {
@@ -227,4 +228,36 @@ export interface AutocompleteSuggestion {
 
 export interface AutocompleteResponse {
   suggestions: AutocompleteSuggestion[];
+}
+
+// ─── Skills ────────────────────────────────────────────────────
+
+export interface Skill {
+  id: number;
+  name: string;
+  description: string;
+  system_prompt: string;
+  user_prompt_template: string;
+  source_questions: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SkillFormData {
+  name: string;
+  description: string;
+  system_prompt: string;
+  user_prompt_template: string;
+  source_questions: string;
+}
+
+export interface UserQuestion {
+  id: number;
+  question: string;
+  conversation_id: number;
+  created_at: string;
+}
+
+export interface EnhancePromptResponse {
+  enhanced_prompt: string;
 }

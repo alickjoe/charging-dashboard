@@ -36,6 +36,13 @@ async def list_conversations():
     return [_row_to_response(r) for r in rows]
 
 
+@router.get("/user-questions")
+async def list_user_questions():
+    """List all distinct user questions from all conversations, newest first."""
+    rows = await ConversationStore.get_all_user_questions()
+    return rows
+
+
 @router.get("/{conversation_id}", response_model=ConversationDetailResponse)
 async def get_conversation(conversation_id: int):
     """Get conversation detail with messages."""

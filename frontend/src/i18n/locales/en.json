@@ -2,7 +2,8 @@
   "nav": {
     "connections": "Connections",
     "aiConfig": "AI Config",
-    "aiQuery": "AI Query"
+    "aiQuery": "AI Query",
+    "skills": "Prompt Skills"
   },
   "app": {
     "title": "EV Charging Dashboard",
@@ -233,5 +234,39 @@
     "labelRequired": "Please enter display label",
     "nameUnique": "Unique identifier",
     "cannotBeUndone": "This action cannot be undone."
+  },
+  "skills": {
+    "title": "Prompt Skill Library",
+    "create": "New Skill",
+    "edit": "Edit Skill",
+    "delete": "Delete",
+    "newSkill": "New Skill",
+    "save": "Save",
+    "update": "Update",
+    "empty": "No skills yet. Create one from the left panel.",
+    "nameHint": "Use /name to invoke this skill in a new conversation",
+    "namePlaceholder": "skill name (alphanumeric and underscores)",
+    "description": "Description",
+    "descPlaceholder": "Brief description of this skill's purpose...",
+    "systemPrompt": "System Prompt",
+    "systemPromptPlaceholder": "Define AI behavior rules and analysis strategies...",
+    "userPrompt": "User Prompt Template",
+    "userPromptPlaceholder": "User query template, can be referenced in new conversations...",
+    "nameRequired": "Please enter a skill name",
+    "deleteConfirm": "Confirm delete this skill?",
+    "createSuccess": "Skill created successfully",
+    "updateSuccess": "Skill updated successfully",
+    "saveFailed": "Save failed",
+    "enhance": "AI Enhance",
+    "emptyPrompt": "Prompt is empty, cannot enhance",
+    "enhanceSuccess": "Prompt enhanced successfully",
+    "enhanceFailed": "Enhancement failed",
+    "fromHistory": "Create from History",
+    "selectQuestions": "Select History Questions",
+    "selectAtLeastOne": "Please select at least one question",
+    "createFromSelected": "Create from Selected",
+    "addSkill": "Add Skill",
+    "noMoreSkills": "No more skills available",
+    "noLanguageOverrideHint": "Note: Skill system prompts are appended after the agent's default prompt. Do NOT include language override instructions (e.g., 'reply in English'). The system automatically sets the output language based on the UI language setting."
   }
 }
