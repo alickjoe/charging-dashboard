@@ -2,7 +2,8 @@
   "nav": {
     "connections": "连接管理",
     "aiConfig": "AI 配置",
-    "aiQuery": "AI 查询"
+    "aiQuery": "AI 查询",
+    "skills": "提示词 Skill"
   },
   "app": {
     "title": "EV 充电桩数据看板",
@@ -233,5 +234,39 @@
     "labelRequired": "请输入显示标签",
     "nameUnique": "唯一标识",
     "cannotBeUndone": "此操作不可撤销。"
+  },
+  "skills": {
+    "title": "提示词 Skill 库",
+    "create": "新建 Skill",
+    "edit": "编辑 Skill",
+    "delete": "删除",
+    "newSkill": "新建 Skill",
+    "save": "保存",
+    "update": "更新",
+    "empty": "暂无 Skill，点击左侧新建",
+    "nameHint": "使用 /名称 在新对话中调用此 Skill",
+    "namePlaceholder": "skill 名称 (英文、数字、下划线)",
+    "description": "描述",
+    "descPlaceholder": "简要说明此 Skill 的用途...",
+    "systemPrompt": "系统提示词",
+    "systemPromptPlaceholder": "定义 AI 的行为规则和分析策略...",
+    "userPrompt": "用户提示词模板",
+    "userPromptPlaceholder": "用户的查询模板，可在新对话中引用...",
+    "nameRequired": "请输入 Skill 名称",
+    "deleteConfirm": "确定删除此 Skill？",
+    "createSuccess": "Skill 创建成功",
+    "updateSuccess": "Skill 更新成功",
+    "saveFailed": "保存失败",
+    "enhance": "AI 增强",
+    "emptyPrompt": "提示词内容为空，无法增强",
+    "enhanceSuccess": "提示词增强成功",
+    "enhanceFailed": "增强失败",
+    "fromHistory": "从历史问题创建",
+    "selectQuestions": "选择历史问题",
+    "selectAtLeastOne": "至少选择一个问题",
+    "createFromSelected": "从选中问题创建",
+    "addSkill": "添加 Skill",
+    "noMoreSkills": "没有更多可选 Skill",
+    "noLanguageOverrideHint": "注意：Skill 系统提示词会追加到 AI Agent 默认提示词后面，请勿在其中写入语言覆盖指令（如'用中文回答'），系统会自动根据界面语言设定输出语言。"
   }
 }

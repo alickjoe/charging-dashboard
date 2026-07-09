@@ -24,6 +24,7 @@ def _row_to_response(row: dict) -> ConversationResponse:
         connection_name=row["connection_name"],
         llm_config_id=row["llm_config_id"],
         message_count=row.get("message_count", 0),
+        skill_ids=row.get("skill_ids", []),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -34,6 +35,13 @@ async def list_conversations():
     """List all conversations with message counts."""
     rows = await ConversationStore.list_all()
     return [_row_to_response(r) for r in rows]
+
+
+@router.get("/user-questions")
+async def list_user_questions():
+    """List all distinct user questions from all conversations, newest first."""
+    rows = await ConversationStore.get_all_user_questions()
+    return rows
 
 
 @router.get("/{conversation_id}", response_model=ConversationDetailResponse)

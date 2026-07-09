@@ -16,7 +16,7 @@ from app.schemas.llm import (
     NLQueryRequest,
     NLQueryResponse,
 )
-from app.sqlite_store import LLMConfigStore, ConversationStore
+from app.sqlite_store import LLMConfigStore, ConversationStore, SkillStore
 from app.services.llm_service import execute_nl_query
 from app.services.llm_agent_service import run_agent_stream
 
@@ -171,6 +171,25 @@ async def nl_query_stream(body: NLQueryRequest, request: Request):
         raise HTTPException(status_code=404, detail=f"LLM 配置 ID={body.llm_config_id} 不存在")
     llm_row = LLMConfigStore.decrypt_api_key(llm_row)
 
+    # Load skill prompts if skill_ids provided
+    skill_prompts: list[str] | None = None
+    if body.skill_ids:
+        skill_rows = await SkillStore.get_by_ids(body.skill_ids)
+        logger.info("NL query with skill_ids=%s, loaded %d skill(s)", body.skill_ids, len(skill_rows))
+        prompt_parts: list[str] = []
+        for s in skill_rows:
+            sp = s.get("system_prompt", "").strip()
+            ut = s.get("user_prompt_template", "").strip()
+            if sp:
+                prompt_parts.append(sp)
+                logger.info("  Skill '%s': system_prompt loaded (%d chars)", s["name"], len(sp))
+            if ut:
+                prompt_parts.append(ut)
+                logger.info("  Skill '%s': user_prompt_template loaded (%d chars)", s["name"], len(ut))
+        if not prompt_parts:
+            logger.warning("  No prompt content found in selected skills (both system_prompt and user_prompt_template are empty)!")
+        skill_prompts = prompt_parts if prompt_parts else None
+
     # Load history messages if continuing a conversation
     history_messages = []
     conversation_id = body.conversation_id
@@ -201,6 +220,7 @@ async def nl_query_stream(body: NLQueryRequest, request: Request):
             question=body.question,
             history_messages=history_messages if history_messages else None,
             language=body.language,
+            skill_prompts=skill_prompts,
         ):
             if sse_str.startswith("data: "):
                 try:
@@ -235,6 +255,7 @@ async def nl_query_stream(body: NLQueryRequest, request: Request):
 
         raw_msgs_json = json.dumps(final_conversation_messages or [], ensure_ascii=False)
         blocks_json = json.dumps(collected_blocks, ensure_ascii=False)
+        skill_ids_json = json.dumps(body.skill_ids) if body.skill_ids else '[]'
 
         await ConversationStore.add_message(
             conversation_id=conversation_id,
@@ -243,6 +264,7 @@ async def nl_query_stream(body: NLQueryRequest, request: Request):
             answer_blocks="[]",
             llm_time_ms=None,
             raw_messages=raw_msgs_json,
+            skill_ids=skill_ids_json,
         )
         await ConversationStore.add_message(
             conversation_id=conversation_id,
@@ -251,6 +273,7 @@ async def nl_query_stream(body: NLQueryRequest, request: Request):
             answer_blocks=blocks_json,
             llm_time_ms=final_llm_time,
             raw_messages=raw_msgs_json,
+            skill_ids=skill_ids_json,
         )
 
         # Now yield the done event — frontend will see messages when it reloads

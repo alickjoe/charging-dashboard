@@ -12,9 +12,11 @@ import {
 import { fetchConnections } from '../api/connections';
 import { fetchLLMConfigs, executeNLQueryStream } from '../api/llm';
 import { fetchConversations, fetchConversationDetail, deleteConversation } from '../api/conversations';
+import { fetchSkills } from '../api/skills';
 import type {
   ConnectionInfo, LLMConfig, SSEEvent,
   Conversation, ConversationDetail, ConversationMessage,
+  Skill,
 } from '../types';
 import { useTranslation } from 'react-i18next';
 import { useLanguageStore } from '../i18n/store';
@@ -339,6 +341,11 @@ export default function NLQueryPage() {
   const abortRef = useRef<AbortController | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
+  // ── Skill selection ──
+  const [selectedSkillIds, setSelectedSkillIds] = useState<number[]>([]);
+  const [showSkillPicker, setShowSkillPicker] = useState(false);
+  const [slashFilter, setSlashFilter] = useState('');
+
   // ── Data fetching ──
   const { data: connections, isLoading: loadingConns } = useQuery({
     queryKey: ['connections'],
@@ -353,6 +360,11 @@ export default function NLQueryPage() {
   const { data: conversations, isLoading: loadingConvs } = useQuery({
     queryKey: ['conversations'],
     queryFn: fetchConversations,
+  });
+
+  const { data: skills } = useQuery({
+    queryKey: ['skills'],
+    queryFn: fetchSkills,
   });
 
   const availableConns = connections || [];
@@ -417,7 +429,18 @@ export default function NLQueryPage() {
   const handleSend = () => {
     const conn = activeConvMeta?.connection_name || selectedConn;
     const llmId = activeConvMeta?.llm_config_id || selectedLLM;
-    if (!conn || !llmId || !question.trim()) return;
+
+    // Build effective question: user's input, or fall back to selected skills' templates
+    let effectiveQuestion = question.trim();
+    if (!effectiveQuestion && selectedSkillIds.length > 0) {
+      const skillList = skills || [];
+      effectiveQuestion = skillList
+        .filter((s) => selectedSkillIds.includes(s.id) && s.user_prompt_template?.trim())
+        .map((s) => s.user_prompt_template!)
+        .join('\n\n');
+    }
+
+    if (!conn || !llmId || !effectiveQuestion) return;
 
     setQuerying(true);
     resetStreamState();
@@ -426,9 +449,10 @@ export default function NLQueryPage() {
       {
         connection_name: conn,
         llm_config_id: llmId,
-        question: question.trim(),
+        question: effectiveQuestion,
         conversation_id: activeConvId ?? undefined,
         language: language,
+        skill_ids: selectedSkillIds.length > 0 ? selectedSkillIds : undefined,
       },
       (event: SSEEvent) => {
         switch (event.type) {
@@ -516,6 +540,9 @@ export default function NLQueryPage() {
     setMessages([]);
     resetStreamState();
     setQuestion('');
+    setSelectedSkillIds([]);
+    setShowSkillPicker(false);
+    setSlashFilter('');
   };
 
   const handleSelectConv = (conv: Conversation) => {
@@ -553,7 +580,14 @@ export default function NLQueryPage() {
   // ── Determine if we can send ──
   const conn = activeConvMeta?.connection_name || selectedConn;
   const llmId = activeConvMeta?.llm_config_id || selectedLLM;
-  const canSend = !!conn && !!llmId && !!question.trim() && !querying;
+  const skillQuestion = selectedSkillIds.length > 0
+    ? (skills || [])
+        .filter((s) => selectedSkillIds.includes(s.id) && s.user_prompt_template?.trim())
+        .map((s) => s.user_prompt_template!)
+        .join('\n\n')
+    : '';
+  const effectiveQuestion = question.trim() || skillQuestion;
+  const canSend = !!conn && !!llmId && !!effectiveQuestion && !querying;
 
   // ── Conversation info for header ──
   const connLabel = availableConns.find((c) => c.name === conn)?.label || conn || '';
@@ -626,6 +660,24 @@ export default function NLQueryPage() {
                     <div style={{ fontSize: 12, color: '#999', marginTop: 2 }}>
                       {t('chat.messages', { count: conv.message_count })} · {fmtTime(conv.updated_at)}
                     </div>
+                    {conv.skill_ids && conv.skill_ids.length > 0 && (
+                      <div style={{ marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                        {conv.skill_ids.slice(0, 3).map((sid) => {
+                          const skillName = (skills || []).find((s) => s.id === sid)?.name;
+                          if (!skillName) return null;
+                          return (
+                            <Tag key={sid} color="purple" style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>
+                              {skillName}
+                            </Tag>
+                          );
+                        })}
+                        {conv.skill_ids.length > 3 && (
+                          <Tag color="purple" style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>
+                            +{conv.skill_ids.length - 3}
+                          </Tag>
+                        )}
+                      </div>
+                    )}
                   </div>
                   <Popconfirm
                     title={t('chat.deleteConfirm')}
@@ -735,7 +787,8 @@ export default function NLQueryPage() {
           {displayMessages.map((msg) => (
             <div key={msg.id} style={{ marginBottom: 20 }}>
               {/* User message */}
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+              {msg.role === 'user' && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', marginBottom: 8 }}>
                 <div style={{
                   maxWidth: '75%',
                   background: '#1890ff', color: '#fff',
@@ -746,7 +799,30 @@ export default function NLQueryPage() {
                 }}>
                   {msg.question}
                 </div>
+                {(() => {
+                  try {
+                    const ids: number[] = JSON.parse(msg.skill_ids || '[]');
+                    if (ids.length > 0) {
+                      const names = ids
+                        .map((sid) => (skills || []).find((s) => s.id === sid)?.name)
+                        .filter(Boolean) as string[];
+                      if (names.length > 0) {
+                        return (
+                          <div style={{ marginTop: 3, display: 'flex', gap: 3, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                            {names.map((name, i) => (
+                              <Tag key={i} color="purple" style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>
+                                {name}
+                              </Tag>
+                            ))}
+                          </div>
+                        );
+                      }
+                    }
+                  } catch { /* ignore parse errors */ }
+                  return null;
+                })()}
               </div>
+              )}
 
               {/* Assistant message */}
               {msg.role === 'assistant' && parseAnswerBlocks(msg.answer_blocks).length > 0 && (
@@ -845,6 +921,65 @@ export default function NLQueryPage() {
           padding: '12px 24px', borderTop: '1px solid #f0f0f0',
           background: '#fff',
         }}>
+          {/* Skill selector bar */}
+          {(skills || []).length > 0 && (
+            <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              {(skills || []).filter(s => selectedSkillIds.includes(s.id)).map((skill) => (
+                <Tag
+                  key={skill.id}
+                  closable
+                  onClose={() => setSelectedSkillIds(prev => prev.filter(id => id !== skill.id))}
+                  color="purple"
+                >
+                  /{skill.name}
+                </Tag>
+              ))}
+              <Button
+                size="small"
+                type="dashed"
+                icon={<PlusOutlined />}
+                onClick={() => setShowSkillPicker(!showSkillPicker)}
+              >
+                {t('skills.addSkill')}
+              </Button>
+            </div>
+          )}
+
+          {/* Skill picker dropdown */}
+          {showSkillPicker && (
+            <div style={{
+              marginBottom: 8, padding: 8,
+              border: '1px solid #d9d9d9', borderRadius: 6,
+              background: '#fff', maxHeight: 200, overflowY: 'auto',
+            }}>
+              {(skills || [])
+                .filter(s => !selectedSkillIds.includes(s.id))
+                .filter(s => !slashFilter || s.name.toLowerCase().includes(slashFilter.toLowerCase()))
+                .map((skill) => (
+                  <div
+                    key={skill.id}
+                    onClick={() => {
+                      setSelectedSkillIds(prev => [...prev, skill.id]);
+                      setShowSkillPicker(false);
+                      setSlashFilter('');
+                    }}
+                    style={{
+                      padding: '4px 8px', cursor: 'pointer', borderRadius: 4,
+                      display: 'flex', alignItems: 'center', gap: 8,
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget as HTMLElement).style.background = '#f5f5f5'}
+                    onMouseLeave={(e) => (e.currentTarget as HTMLElement).style.background = 'transparent'}
+                  >
+                    <Tag color="purple" style={{ margin: 0 }}>/{skill.name}</Tag>
+                    <Text type="secondary" style={{ fontSize: 12 }}>{skill.description}</Text>
+                  </div>
+                ))}
+              {(skills || []).filter(s => !selectedSkillIds.includes(s.id)).length === 0 && (
+                <Text type="secondary" style={{ padding: 8 }}>{t('skills.noMoreSkills')}</Text>
+              )}
+            </div>
+          )}
+
           <Space.Compact style={{ width: '100%' }}>
             <TextArea
               placeholder={
@@ -853,7 +988,18 @@ export default function NLQueryPage() {
                   : t('chat.placeholderNew')
               }
               value={question}
-              onChange={(e) => setQuestion(e.target.value)}
+              onChange={(e) => {
+                const val = e.target.value;
+                setQuestion(val);
+                // Detect / typing for skill autocomplete
+                const slashMatch = val.match(/^\/(\w*)$/);
+                if (slashMatch && (skills || []).length > 0) {
+                  setShowSkillPicker(true);
+                  setSlashFilter(slashMatch[1] || '');
+                } else if (!val.startsWith('/')) {
+                  setSlashFilter('');
+                }
+              }}
               rows={2}
               disabled={querying}
               onPressEnter={(e) => {

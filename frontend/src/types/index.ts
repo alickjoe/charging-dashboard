@@ -138,6 +138,7 @@ export interface NLQueryRequest {
   question: string;
   conversation_id?: number;
   language?: string;
+  skill_ids?: number[];
 }
 
 export interface NLQueryResponse {
@@ -170,6 +171,7 @@ export interface Conversation {
   connection_name: string;
   llm_config_id: number;
   message_count: number;
+  skill_ids: number[];
   created_at: string;
   updated_at: string;
 }
@@ -182,6 +184,7 @@ export interface ConversationMessage {
   answer_blocks: string;  // JSON string of StreamBlock[]
   llm_time_ms: number | null;
   raw_messages: string;
+  skill_ids: string;  // JSON string of int[], e.g. "[1,2]"
   created_at: string;
 }
 
@@ -227,4 +230,36 @@ export interface AutocompleteSuggestion {
 
 export interface AutocompleteResponse {
   suggestions: AutocompleteSuggestion[];
+}
+
+// ─── Skills ────────────────────────────────────────────────────
+
+export interface Skill {
+  id: number;
+  name: string;
+  description: string;
+  system_prompt: string;
+  user_prompt_template: string;
+  source_questions: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SkillFormData {
+  name: string;
+  description: string;
+  system_prompt: string;
+  user_prompt_template: string;
+  source_questions: string;
+}
+
+export interface UserQuestion {
+  id: number;
+  question: string;
+  conversation_id: number;
+  created_at: string;
+}
+
+export interface EnhancePromptResponse {
+  enhanced_prompt: string;
 }

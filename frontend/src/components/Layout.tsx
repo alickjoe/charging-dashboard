@@ -6,6 +6,7 @@ import {
   DatabaseOutlined,
   RobotOutlined,
   SearchOutlined,
+  BulbOutlined,
 } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import { useLanguageStore } from '../i18n/store';
@@ -42,6 +43,11 @@ export default function Layout({ children }: LayoutProps) {
       icon: <SearchOutlined />,
       label: t('nav.aiQuery'),
     },
+    {
+      key: '/skills',
+      icon: <BulbOutlined />,
+      label: t('nav.skills'),
+    },
   ], [t]);
 
   const handleMenuClick = (e: { key: string }) => {
@@ -55,6 +61,7 @@ export default function Layout({ children }: LayoutProps) {
     if (path === '/connections') return ['/connections'];
     if (path === '/llm-configs') return ['/llm-configs'];
     if (path === '/nl-query') return ['/nl-query'];
+    if (path === '/skills') return ['/skills'];
     if (path.startsWith('/databases/') || path.startsWith('/charts/')) return ['/connections'];
     return [];
   };

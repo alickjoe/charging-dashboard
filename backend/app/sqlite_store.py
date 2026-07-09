@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
     answer_blocks   TEXT NOT NULL DEFAULT '[]',
     llm_time_ms     REAL,
     raw_messages    TEXT NOT NULL DEFAULT '[]',
+    skill_ids       TEXT NOT NULL DEFAULT '[]',
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -88,6 +89,17 @@ CREATE TABLE IF NOT EXISTS saved_queries (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_saved_queries_unique
 ON saved_queries(connection_name, name);
+
+CREATE TABLE IF NOT EXISTS skills (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    name                TEXT NOT NULL UNIQUE,
+    description         TEXT NOT NULL DEFAULT '',
+    system_prompt       TEXT NOT NULL DEFAULT '',
+    user_prompt_template TEXT NOT NULL DEFAULT '',
+    source_questions    TEXT NOT NULL DEFAULT '[]',
+    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
@@ -109,11 +121,18 @@ def _get_conn() -> sqlite3.Connection:
 
 
 async def init_db() -> None:
-    """Create tables if they don't exist."""
+    """Create tables if they don't exist, and run migrations."""
     def _init():
         conn = _get_conn()
         try:
             conn.executescript(DDL)
+            # Migration: add skill_ids column to conversation_messages if missing
+            try:
+                conn.execute(
+                    "ALTER TABLE conversation_messages ADD COLUMN skill_ids TEXT NOT NULL DEFAULT '[]'"
+                )
+            except sqlite3.OperationalError:
+                pass  # Column already exists
             conn.commit()
         finally:
             conn.close()
@@ -469,6 +488,7 @@ class ConversationStore:
     @staticmethod
     async def list_all() -> list[dict]:
         def _do():
+            import json as _json
             conn = _get_conn()
             try:
                 rows = conn.execute(
@@ -478,7 +498,34 @@ class ConversationStore:
                        GROUP BY c.id
                        ORDER BY c.updated_at DESC"""
                 ).fetchall()
-                return [dict(r) for r in rows]
+                results = [dict(r) for r in rows]
+
+                # Aggregate skill_ids across all messages per conversation
+                conv_ids = [r["id"] for r in results]
+                if conv_ids:
+                    placeholders = ",".join("?" for _ in conv_ids)
+                    skill_rows = conn.execute(
+                        f"""SELECT conversation_id, skill_ids
+                            FROM conversation_messages
+                            WHERE conversation_id IN ({placeholders})
+                            AND skill_ids != '[]'""",
+                        conv_ids,
+                    ).fetchall()
+                    skill_map: dict[int, set] = {}
+                    for sr in skill_rows:
+                        cid = sr["conversation_id"]
+                        try:
+                            ids = _json.loads(sr["skill_ids"])
+                            skill_map.setdefault(cid, set()).update(ids)
+                        except (_json.JSONDecodeError, TypeError):
+                            pass
+                    for r in results:
+                        r["skill_ids"] = sorted(skill_map.get(r["id"], set()))
+                else:
+                    for r in results:
+                        r["skill_ids"] = []
+
+                return results
             finally:
                 conn.close()
         return await asyncio.to_thread(_do)
@@ -543,15 +590,16 @@ class ConversationStore:
         answer_blocks: str,
         llm_time_ms: Optional[float],
         raw_messages: str,
+        skill_ids: str = '[]',
     ) -> dict:
         def _do():
             conn = _get_conn()
             try:
                 conn.execute(
                     """INSERT INTO conversation_messages
-                       (conversation_id, role, question, answer_blocks, llm_time_ms, raw_messages)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
-                    (conversation_id, role, question, answer_blocks, llm_time_ms, raw_messages),
+                       (conversation_id, role, question, answer_blocks, llm_time_ms, raw_messages, skill_ids)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (conversation_id, role, question, answer_blocks, llm_time_ms, raw_messages, skill_ids),
                 )
                 conn.execute(
                     "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
@@ -594,6 +642,30 @@ class ConversationStore:
                 if row and row["raw_messages"]:
                     return _json.loads(row["raw_messages"])
                 return []
+            finally:
+                conn.close()
+        return await asyncio.to_thread(_do)
+
+    @staticmethod
+    async def get_all_user_questions() -> list[dict]:
+        """Return all distinct user questions from conversation_messages, newest first."""
+        def _do():
+            conn = _get_conn()
+            try:
+                rows = conn.execute(
+                    """SELECT id, question, conversation_id, created_at
+                       FROM conversation_messages
+                       WHERE role = 'user' AND question != ''
+                       ORDER BY created_at DESC"""
+                ).fetchall()
+                seen = set()
+                result = []
+                for r in rows:
+                    q = r["question"]
+                    if q not in seen:
+                        seen.add(q)
+                        result.append(dict(r))
+                return result
             finally:
                 conn.close()
         return await asyncio.to_thread(_do)
@@ -680,6 +752,132 @@ class SavedQueryStore:
                 )
                 conn.commit()
                 return cur.rowcount > 0
+            finally:
+                conn.close()
+        return await asyncio.to_thread(_do)
+
+
+class SkillStore:
+    """CRUD operations for skills."""
+
+    @staticmethod
+    async def list_all() -> list[dict]:
+        def _do():
+            conn = _get_conn()
+            try:
+                rows = conn.execute(
+                    "SELECT * FROM skills ORDER BY created_at DESC"
+                ).fetchall()
+                return [dict(r) for r in rows]
+            finally:
+                conn.close()
+        return await asyncio.to_thread(_do)
+
+    @staticmethod
+    async def get_by_id(id: int) -> Optional[dict]:
+        def _do():
+            conn = _get_conn()
+            try:
+                row = conn.execute(
+                    "SELECT * FROM skills WHERE id = ?", (id,)
+                ).fetchone()
+                return dict(row) if row else None
+            finally:
+                conn.close()
+        return await asyncio.to_thread(_do)
+
+    @staticmethod
+    async def get_by_name(name: str) -> Optional[dict]:
+        def _do():
+            conn = _get_conn()
+            try:
+                row = conn.execute(
+                    "SELECT * FROM skills WHERE name = ?", (name,)
+                ).fetchone()
+                return dict(row) if row else None
+            finally:
+                conn.close()
+        return await asyncio.to_thread(_do)
+
+    @staticmethod
+    async def create(data: dict) -> dict:
+        def _do():
+            conn = _get_conn()
+            try:
+                conn.execute(
+                    """INSERT INTO skills
+                       (name, description, system_prompt, user_prompt_template, source_questions)
+                       VALUES (:name, :description, :system_prompt, :user_prompt_template, :source_questions)""",
+                    data,
+                )
+                conn.commit()
+                row = conn.execute(
+                    "SELECT * FROM skills WHERE id = last_insert_rowid()"
+                ).fetchone()
+                return dict(row)
+            finally:
+                conn.close()
+        return await asyncio.to_thread(_do)
+
+    @staticmethod
+    async def update(id: int, data: dict) -> Optional[dict]:
+        def _do():
+            conn = _get_conn()
+            try:
+                existing = conn.execute(
+                    "SELECT * FROM skills WHERE id = ?", (id,)
+                ).fetchone()
+                if not existing:
+                    return None
+
+                merged = dict(existing)
+                for k, v in data.items():
+                    if v is not None:
+                        merged[k] = v
+                merged["updated_at"] = None
+
+                conn.execute(
+                    """UPDATE skills SET
+                       name=:name, description=:description,
+                       system_prompt=:system_prompt, user_prompt_template=:user_prompt_template,
+                       source_questions=:source_questions, updated_at=datetime('now')
+                       WHERE id=:id""",
+                    {**merged, "id": id},
+                )
+                conn.commit()
+                row = conn.execute(
+                    "SELECT * FROM skills WHERE id = ?", (id,)
+                ).fetchone()
+                return dict(row)
+            finally:
+                conn.close()
+        return await asyncio.to_thread(_do)
+
+    @staticmethod
+    async def delete(id: int) -> bool:
+        def _do():
+            conn = _get_conn()
+            try:
+                cur = conn.execute(
+                    "DELETE FROM skills WHERE id = ?", (id,)
+                )
+                conn.commit()
+                return cur.rowcount > 0
+            finally:
+                conn.close()
+        return await asyncio.to_thread(_do)
+
+    @staticmethod
+    async def get_by_ids(ids: list[int]) -> list[dict]:
+        def _do():
+            conn = _get_conn()
+            try:
+                placeholders = ",".join("?" for _ in ids)
+                rows = conn.execute(
+                    f"SELECT * FROM skills WHERE id IN ({placeholders})",
+                    ids,
+                ).fetchall()
+                return [dict(r) for r in rows]
             finally:
                 conn.close()
         return await asyncio.to_thread(_do)

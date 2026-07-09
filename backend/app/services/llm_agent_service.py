@@ -18,6 +18,8 @@ AGENT_SYSTEM_PROMPT = """## CRITICAL LANGUAGE REQUIREMENT
 
 YOU MUST WRITE ALL YOUR OUTPUT IN {language}. This includes your reasoning, step-by-step thinking, analysis, explanations, and final answer. The user's question language is irrelevant — you reply in {language} ALWAYS.
 
+**IMPORTANT**: Database query results may contain text in other languages (e.g. Chinese column values). This does NOT change your output language. Even when analyzing data that contains Chinese/other-language content, ALL of your writing MUST remain in {language}. The language of the data does NOT determine the language of your response.
+
 ---
 
 You are a data analyst with read-only access to a PostgreSQL database. Your job is to answer the user's question by exploring and analyzing the data.
@@ -151,6 +153,7 @@ async def run_agent_stream(
     question: str,
     history_messages: list | None = None,
     language: str = "en",
+    skill_prompts: list[str] | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     Agent loop with SSE streaming output.
@@ -168,6 +171,15 @@ async def run_agent_stream(
 
     system_prompt = AGENT_SYSTEM_PROMPT.format(schema_text=schema_text, language=lang_name)
 
+    # Append user-defined skill prompts (after language directive, before user message)
+    if skill_prompts:
+        logger.info("Appending %d skill prompt segment(s) to system prompt", len(skill_prompts))
+        skill_section = "\n\n## User-Defined Skills\n\n" + "\n\n".join(skill_prompts)
+        # Re-assert language requirement after skills to prevent skill content
+        # from diluting the language directive (mitigates "lost in the middle")
+        skill_section += f"\n\n---\n**REMINDER**: The CRITICAL LANGUAGE REQUIREMENT at the start of this prompt remains in effect. All your responses, reasoning, analysis, and final answers MUST be in {lang_name}. This is non-negotiable."
+        system_prompt = system_prompt + skill_section
+
     api_base = llm_config["api_base"].rstrip("/")
     api_key = llm_config["api_key"]
     model = llm_config["model"]
@@ -180,7 +192,7 @@ async def run_agent_stream(
                 messages.append(msg)
     # Inject language directive into user message for double enforcement
     # (multi-system-message not used due to API compatibility concerns)
-    messages.append({"role": "user", "content": f"[Language directive: respond in {lang_name}.] {question}"})
+    messages.append({"role": "user", "content": f"[⬤ Output language: {lang_name}. ALL reasoning, analysis, and conclusions MUST be in {lang_name} — regardless of the question's language or database data values. ⬤] {question}"})
 
     async with httpx.AsyncClient(timeout=120, verify=False) as client:
         for _round in range(MAX_ROUNDS):
@@ -319,7 +331,9 @@ async def run_agent_stream(
                             "rows": rows[:100],
                             "total_rows": len(rows),
                         })
-                        tool_result = result_preview
+                        # Prepend language reminder to tool result to prevent
+                        # Chinese data values from causing mid-response language switch
+                        tool_result = f"[REMINDER: You MUST analyze these results and write ALL conclusions in {lang_name}. The language of data values is irrelevant.]\n\n{result_preview}"
                     except Exception as e:
                         tool_result = f"Query execution failed: {str(e)}"
                         yield _sse_event("error", {"message": tool_result})
