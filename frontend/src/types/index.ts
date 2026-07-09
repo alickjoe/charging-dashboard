@@ -171,6 +171,7 @@ export interface Conversation {
   connection_name: string;
   llm_config_id: number;
   message_count: number;
+  skill_ids: number[];
   created_at: string;
   updated_at: string;
 }
@@ -183,6 +184,7 @@ export interface ConversationMessage {
   answer_blocks: string;  // JSON string of StreamBlock[]
   llm_time_ms: number | null;
   raw_messages: string;
+  skill_ids: string;  // JSON string of int[], e.g. "[1,2]"
   created_at: string;
 }
 

@@ -19,6 +19,7 @@ class MessageResponse(BaseModel):
     answer_blocks: str  # JSON string of StreamBlock[]
     llm_time_ms: Optional[float] = None
     raw_messages: str  # JSON string
+    skill_ids: str = '[]'  # JSON string of int[], e.g. "[1,2]"
     created_at: str
 
 
@@ -28,6 +29,7 @@ class ConversationResponse(BaseModel):
     connection_name: str
     llm_config_id: int
     message_count: int = 0
+    skill_ids: list[int] = []  # Deduplicated skill IDs used in this conversation
     created_at: str
     updated_at: str
 

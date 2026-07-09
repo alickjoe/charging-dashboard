@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
     answer_blocks   TEXT NOT NULL DEFAULT '[]',
     llm_time_ms     REAL,
     raw_messages    TEXT NOT NULL DEFAULT '[]',
+    skill_ids       TEXT NOT NULL DEFAULT '[]',
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -120,11 +121,18 @@ def _get_conn() -> sqlite3.Connection:
 
 
 async def init_db() -> None:
-    """Create tables if they don't exist."""
+    """Create tables if they don't exist, and run migrations."""
     def _init():
         conn = _get_conn()
         try:
             conn.executescript(DDL)
+            # Migration: add skill_ids column to conversation_messages if missing
+            try:
+                conn.execute(
+                    "ALTER TABLE conversation_messages ADD COLUMN skill_ids TEXT NOT NULL DEFAULT '[]'"
+                )
+            except sqlite3.OperationalError:
+                pass  # Column already exists
             conn.commit()
         finally:
             conn.close()
@@ -480,6 +488,7 @@ class ConversationStore:
     @staticmethod
     async def list_all() -> list[dict]:
         def _do():
+            import json as _json
             conn = _get_conn()
             try:
                 rows = conn.execute(
@@ -489,7 +498,34 @@ class ConversationStore:
                        GROUP BY c.id
                        ORDER BY c.updated_at DESC"""
                 ).fetchall()
-                return [dict(r) for r in rows]
+                results = [dict(r) for r in rows]
+
+                # Aggregate skill_ids across all messages per conversation
+                conv_ids = [r["id"] for r in results]
+                if conv_ids:
+                    placeholders = ",".join("?" for _ in conv_ids)
+                    skill_rows = conn.execute(
+                        f"""SELECT conversation_id, skill_ids
+                            FROM conversation_messages
+                            WHERE conversation_id IN ({placeholders})
+                            AND skill_ids != '[]'""",
+                        conv_ids,
+                    ).fetchall()
+                    skill_map: dict[int, set] = {}
+                    for sr in skill_rows:
+                        cid = sr["conversation_id"]
+                        try:
+                            ids = _json.loads(sr["skill_ids"])
+                            skill_map.setdefault(cid, set()).update(ids)
+                        except (_json.JSONDecodeError, TypeError):
+                            pass
+                    for r in results:
+                        r["skill_ids"] = sorted(skill_map.get(r["id"], set()))
+                else:
+                    for r in results:
+                        r["skill_ids"] = []
+
+                return results
             finally:
                 conn.close()
         return await asyncio.to_thread(_do)
@@ -554,15 +590,16 @@ class ConversationStore:
         answer_blocks: str,
         llm_time_ms: Optional[float],
         raw_messages: str,
+        skill_ids: str = '[]',
     ) -> dict:
         def _do():
             conn = _get_conn()
             try:
                 conn.execute(
                     """INSERT INTO conversation_messages
-                       (conversation_id, role, question, answer_blocks, llm_time_ms, raw_messages)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
-                    (conversation_id, role, question, answer_blocks, llm_time_ms, raw_messages),
+                       (conversation_id, role, question, answer_blocks, llm_time_ms, raw_messages, skill_ids)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (conversation_id, role, question, answer_blocks, llm_time_ms, raw_messages, skill_ids),
                 )
                 conn.execute(
                     "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",

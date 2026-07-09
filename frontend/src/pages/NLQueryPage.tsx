@@ -660,6 +660,24 @@ export default function NLQueryPage() {
                     <div style={{ fontSize: 12, color: '#999', marginTop: 2 }}>
                       {t('chat.messages', { count: conv.message_count })} · {fmtTime(conv.updated_at)}
                     </div>
+                    {conv.skill_ids && conv.skill_ids.length > 0 && (
+                      <div style={{ marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                        {conv.skill_ids.slice(0, 3).map((sid) => {
+                          const skillName = (skills || []).find((s) => s.id === sid)?.name;
+                          if (!skillName) return null;
+                          return (
+                            <Tag key={sid} color="purple" style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>
+                              {skillName}
+                            </Tag>
+                          );
+                        })}
+                        {conv.skill_ids.length > 3 && (
+                          <Tag color="purple" style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>
+                            +{conv.skill_ids.length - 3}
+                          </Tag>
+                        )}
+                      </div>
+                    )}
                   </div>
                   <Popconfirm
                     title={t('chat.deleteConfirm')}
@@ -769,7 +787,8 @@ export default function NLQueryPage() {
           {displayMessages.map((msg) => (
             <div key={msg.id} style={{ marginBottom: 20 }}>
               {/* User message */}
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+              {msg.role === 'user' && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', marginBottom: 8 }}>
                 <div style={{
                   maxWidth: '75%',
                   background: '#1890ff', color: '#fff',
@@ -780,7 +799,30 @@ export default function NLQueryPage() {
                 }}>
                   {msg.question}
                 </div>
+                {(() => {
+                  try {
+                    const ids: number[] = JSON.parse(msg.skill_ids || '[]');
+                    if (ids.length > 0) {
+                      const names = ids
+                        .map((sid) => (skills || []).find((s) => s.id === sid)?.name)
+                        .filter(Boolean) as string[];
+                      if (names.length > 0) {
+                        return (
+                          <div style={{ marginTop: 3, display: 'flex', gap: 3, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                            {names.map((name, i) => (
+                              <Tag key={i} color="purple" style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>
+                                {name}
+                              </Tag>
+                            ))}
+                          </div>
+                        );
+                      }
+                    }
+                  } catch { /* ignore parse errors */ }
+                  return null;
+                })()}
               </div>
+              )}
 
               {/* Assistant message */}
               {msg.role === 'assistant' && parseAnswerBlocks(msg.answer_blocks).length > 0 && (

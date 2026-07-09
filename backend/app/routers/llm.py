@@ -255,6 +255,7 @@ async def nl_query_stream(body: NLQueryRequest, request: Request):
 
         raw_msgs_json = json.dumps(final_conversation_messages or [], ensure_ascii=False)
         blocks_json = json.dumps(collected_blocks, ensure_ascii=False)
+        skill_ids_json = json.dumps(body.skill_ids) if body.skill_ids else '[]'
 
         await ConversationStore.add_message(
             conversation_id=conversation_id,
@@ -263,6 +264,7 @@ async def nl_query_stream(body: NLQueryRequest, request: Request):
             answer_blocks="[]",
             llm_time_ms=None,
             raw_messages=raw_msgs_json,
+            skill_ids=skill_ids_json,
         )
         await ConversationStore.add_message(
             conversation_id=conversation_id,
@@ -271,6 +273,7 @@ async def nl_query_stream(body: NLQueryRequest, request: Request):
             answer_blocks=blocks_json,
             llm_time_ms=final_llm_time,
             raw_messages=raw_msgs_json,
+            skill_ids=skill_ids_json,
         )
 
         # Now yield the done event — frontend will see messages when it reloads
