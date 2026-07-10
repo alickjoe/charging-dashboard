@@ -286,7 +286,7 @@ export default function DatabaseExplorerPage() {
                   <List.Item.Meta
                     avatar={<TableOutlined />}
                     title={table.table_name}
-                    description={`${t('database.rows', { count: table.row_count_estimate.toLocaleString() })}`}
+                    description={`${t('database.rows', { count: table.row_count_estimate })}`}
                   />
                 </List.Item>
               )}

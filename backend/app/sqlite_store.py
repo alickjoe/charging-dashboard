@@ -1,6 +1,7 @@
 """SQLite-based configuration store for database connections and LLM configs."""
 
 import base64
+import os
 import sqlite3
 import asyncio
 import logging
@@ -9,7 +10,11 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-DB_DIR = Path(__file__).parent.parent / "data"
+_DATA_DIR = os.environ.get("DATA_DIR")
+if _DATA_DIR:
+    DB_DIR = Path(_DATA_DIR)
+else:
+    DB_DIR = Path(__file__).parent.parent / "data"
 DB_PATH = DB_DIR / "config.db"
 
 DDL = """
