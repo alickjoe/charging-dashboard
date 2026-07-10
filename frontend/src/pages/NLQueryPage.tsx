@@ -386,6 +386,7 @@ export default function NLQueryPage() {
         connection_name: detail.connection_name,
         llm_config_id: detail.llm_config_id,
         message_count: detail.messages?.length || 0,
+        skill_ids: detail.skill_ids || [],
         created_at: detail.created_at,
         updated_at: detail.updated_at,
       });

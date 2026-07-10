@@ -1,0 +1,6 @@
+# Build-time dependencies for the Windows installer packaging.
+# These are NOT required at runtime (PyInstaller bundles everything into .exe).
+# Kept separate from backend/requirements.txt to avoid affecting Docker builds.
+pyinstaller>=6.0
+pystray>=0.19
+Pillow>=10.0
