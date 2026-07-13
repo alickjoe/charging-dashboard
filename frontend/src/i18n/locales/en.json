@@ -6,9 +6,9 @@
     "skills": "Prompt Skills"
   },
   "app": {
-    "title": "EV Charging Dashboard",
-    "brand": "Charging Dashboard",
-    "brandShort": "CD"
+    "title": "AI DB Query",
+    "brand": "AI DB Query",
+    "brandShort": "AI"
   },
   "common": {
     "test": "Test",
@@ -169,6 +169,7 @@
     "placeholderContinue": "Continue typing... (Enter to send, Shift+Enter for newline)",
     "placeholderNew": "Describe your query in natural language...",
     "llmTime": "LLM Time: {time}ms",
+    "elapsed": "Elapsed {time}s",
     "showingRows": "Showing first {shown} rows, {total} total",
     "noResults": "No results"
   },
@@ -178,7 +179,11 @@
     "rows": "{count} rows",
     "thinking": "Thinking...",
     "aiThinking": "AI is thinking...",
-    "analysisDone": "Analysis Complete"
+    "analysisDone": "Analysis Complete",
+    "phaseConnecting": "Connecting to AI service...",
+    "phaseThinking": "AI is analyzing...",
+    "phaseExecuting": "Executing query...",
+    "phaseDone": "Analysis Complete"
   },
   "breadcrumb": {
     "connections": "Connections"

@@ -6,9 +6,9 @@
     "skills": "提示词 Skill"
   },
   "app": {
-    "title": "EV 充电桩数据看板",
-    "brand": "充电看板",
-    "brandShort": "⚡"
+    "title": "AI数据库查询",
+    "brand": "AI数据库查询",
+    "brandShort": "AI"
   },
   "common": {
     "test": "测试",
@@ -169,6 +169,7 @@
     "placeholderContinue": "继续输入问题... (Enter 发送，Shift+Enter 换行)",
     "placeholderNew": "用自然语言描述你想查询的数据...",
     "llmTime": "LLM 耗时: {time}ms",
+    "elapsed": "已用 {time}s",
     "showingRows": "显示前 {shown} 行，共 {total} 行",
     "noResults": "查询无结果"
   },
@@ -178,7 +179,11 @@
     "rows": "{count} 行",
     "thinking": "思考中...",
     "aiThinking": "AI 正在思考……",
-    "analysisDone": "分析完成"
+    "analysisDone": "分析完成",
+    "phaseConnecting": "正在连接 AI 服务...",
+    "phaseThinking": "AI 正在分析...",
+    "phaseExecuting": "正在执行查询...",
+    "phaseDone": "分析完成"
   },
   "breadcrumb": {
     "connections": "连接管理"

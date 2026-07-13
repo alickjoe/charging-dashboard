@@ -1,4 +1,4 @@
-"""FastAPI application entry point for Charging Dashboard."""
+"""FastAPI application entry point for AI DB Query."""
 
 from contextlib import asynccontextmanager
 
@@ -23,7 +23,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Charging Dashboard API",
+    title="AI DB Query API",
     version="0.1.0",
     lifespan=lifespan,
 )

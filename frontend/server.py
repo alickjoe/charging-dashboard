@@ -66,7 +66,7 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             data=body,
             method=self.command,
         )
-        # Copy relevant headers
+        # Copy relevant headers (include SSE-related headers)
         forward_headers = [
             "content-type",
             "accept",
@@ -81,13 +81,19 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
         try:
             with urllib.request.urlopen(req, timeout=300) as resp:
                 self.send_response(resp.status)
+                # Forward response headers, adding anti-buffering for SSE streams
+                is_sse = resp.getheader("Content-Type", "").startswith("text/event-stream")
                 for key, val in resp.getheaders():
                     if key.lower() not in ("connection",):
                         self.send_header(key, val)
+                if is_sse:
+                    self.send_header("X-Accel-Buffering", "no")
+                    self.send_header("Cache-Control", "no-cache, no-transform")
                 self.end_headers()
-                # Stream chunks to client (required for SSE streaming)
+                # Stream chunks to client with smaller buffer for lower latency
+                chunk_size = 1024 if is_sse else 8192
                 while True:
-                    chunk = resp.read(8192)
+                    chunk = resp.read(chunk_size)
                     if not chunk:
                         break
                     self.wfile.write(chunk)

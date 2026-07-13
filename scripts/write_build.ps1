@@ -1,14 +1,14 @@
 ﻿$content = @'
 @echo off
 REM ===========================================================================
-REM  Charging Dashboard - One-Click Windows Installer Build Script
+REM  AI DB Query - One-Click Windows Installer Build Script
 REM
 REM  Prerequisites (must be installed and on PATH):
 REM    1. Python 3.12+  (with pip)
 REM    2. Node.js 20+    (with npm)
 REM    3. NSIS 3.x       (makensis.exe)
 REM
-REM  Output: dist\ChargingDashboard-Setup.exe
+REM  Output: dist\AIDBQuery-Setup.exe
 REM ===========================================================================
 
 cd /d "%~dp0\.."
@@ -17,7 +17,7 @@ set DIST_DIR=dist
 set INSTALLER_STAGING=%DIST_DIR%\installer
 
 echo ============================================================
-echo   Charging Dashboard - Installer Build
+echo   AI DB Query - Installer Build
 echo ============================================================
 echo.
 
@@ -91,7 +91,7 @@ if errorlevel 1 (
 echo [STEP 3/8] Backend dependencies installed.
 echo.
 
-echo [STEP 4/8] Building launcher (ChargingDashboard.exe)...
+echo [STEP 4/8] Building launcher (AIDBQuery.exe)...
 python -m PyInstaller scripts\launcher.spec --distpath "%INSTALLER_STAGING%" --workpath "%DIST_DIR%\build\launcher" --noconfirm --clean
 if errorlevel 1 (
     echo [ERROR] launcher build failed
@@ -148,7 +148,7 @@ echo.
 
 echo ============================================================
 echo   BUILD SUCCESSFUL
-echo   Output: %DIST_DIR%\ChargingDashboard-Setup.exe
+echo   Output: %DIST_DIR%\AIDBQuery-Setup.exe
 echo ============================================================
 exit /b 0
 '@

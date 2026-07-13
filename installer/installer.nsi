@@ -1,4 +1,4 @@
-﻿; Charging Dashboard Windows Installer (NSIS)
+﻿; AI DB Query Windows Installer (NSIS)
 ; -------------------------------------------------------
 ; Installs to user-local directory (no admin rights required).
 ; Writes uninstall info to HKCU. Creates Start Menu shortcuts.
@@ -7,13 +7,13 @@
 
 ; --- Basic configuration ----------------------------------------------------
 
-!define PRODUCT_NAME "Charging Dashboard"
+!define PRODUCT_NAME "AI DB Query"
 !define PRODUCT_VERSION "0.1.0"
-!define PRODUCT_PUBLISHER "Charging Dashboard"
+!define PRODUCT_PUBLISHER "AI DB Query"
 !define PRODUCT_WEB_SITE "http://localhost:5173"
 
 Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
-OutFile "..\dist\ChargingDashboard-Setup.exe"
+OutFile "..\dist\AIDBQuery-Setup.exe"
 InstallDir "$LOCALAPPDATA\${PRODUCT_NAME}"
 RequestExecutionLevel user          ; no admin required
 SetCompressor /SOLID lzma
@@ -28,7 +28,7 @@ ShowUninstDetails show
 !define MUI_UNABORTWARNING
 
 ; Finish page: launch app checkbox + desktop shortcut checkbox
-!define MUI_FINISHPAGE_RUN "$INSTDIR\ChargingDashboard.exe"
+!define MUI_FINISHPAGE_RUN "$INSTDIR\AIDBQuery.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "$(LANG_RUN_TEXT)"
 !define MUI_FINISHPAGE_SHOWREADME ""
 !define MUI_FINISHPAGE_SHOWREADME_NOTCHECKED
@@ -67,7 +67,7 @@ LangString LANG_UNINSTALL     ${LANG_SIMPCHINESE}  "卸载 ${PRODUCT_NAME}"
 
 Function CreateDesktopShortcut
   CreateShortCut "$DESKTOP\${PRODUCT_NAME}.lnk" \
-    "$INSTDIR\ChargingDashboard.exe" "" "$INSTDIR\ChargingDashboard.exe" 0
+    "$INSTDIR\AIDBQuery.exe" "" "$INSTDIR\AIDBQuery.exe" 0
 FunctionEnd
 
 ; --- Installer section ------------------------------------------------------
@@ -76,7 +76,7 @@ Section "Install"
   SetOutPath "$INSTDIR"
 
   ; Launcher executable
-  File "..\dist\installer\ChargingDashboard.exe"
+  File "..\dist\installer\AIDBQuery.exe"
 
   ; Backend
   SetOutPath "$INSTDIR\backend"
@@ -96,7 +96,7 @@ Section "Install"
   ; Start Menu shortcuts
   CreateDirectory "$SMPROGRAMS\${PRODUCT_NAME}"
   CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\${PRODUCT_NAME}.lnk" \
-    "$INSTDIR\ChargingDashboard.exe" "" "$INSTDIR\ChargingDashboard.exe" 0
+    "$INSTDIR\AIDBQuery.exe" "" "$INSTDIR\AIDBQuery.exe" 0
   CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\$(LANG_UNINSTALL).lnk" \
     "$INSTDIR\uninst.exe"
 
@@ -124,12 +124,12 @@ SectionEnd
 
 Section "Uninstall"
   ; Terminate running processes silently
-  nsExec::ExecToLog 'taskkill /f /im ChargingDashboard.exe'
+  nsExec::ExecToLog 'taskkill /f /im AIDBQuery.exe'
   nsExec::ExecToLog 'taskkill /f /im backend.exe'
   nsExec::ExecToLog 'taskkill /f /im server.exe'
 
   ; Remove files
-  Delete "$INSTDIR\ChargingDashboard.exe"
+  Delete "$INSTDIR\AIDBQuery.exe"
   Delete "$INSTDIR\backend\backend.exe"
   Delete "$INSTDIR\frontend\server.exe"
   RMDir "$INSTDIR\frontend"

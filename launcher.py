@@ -1,4 +1,4 @@
-"""System-tray launcher for Charging Dashboard on Windows.
+"""System-tray launcher for AI DB Query on Windows.
 
 Starts the FastAPI backend and the frontend static-file server as child processes,
 provides a system-tray icon with an "Open Dashboard" / "Quit" menu, and
@@ -53,7 +53,7 @@ logger = logging.getLogger("launcher")
 # ---------------------------------------------------------------------------
 
 def _make_icon():
-    """Generate a simple 64x64 tray icon (blue square with "CD" text)."""
+    """Generate a simple 64x64 tray icon (blue square with "AI" text)."""
     from PIL import Image, ImageDraw, ImageFont
 
     size = 64
@@ -63,10 +63,10 @@ def _make_icon():
         font = ImageFont.truetype("segoeui.ttf", 28)
     except Exception:
         font = ImageFont.load_default()
-    bbox = draw.textbbox((0, 0), "CD", font=font)
+    bbox = draw.textbbox((0, 0), "AI", font=font)
     tw = bbox[2] - bbox[0]
     th = bbox[3] - bbox[1]
-    draw.text(((size - tw) / 2, (size - th) / 2 - 2), "CD", fill="white", font=font)
+    draw.text(((size - tw) / 2, (size - th) / 2 - 2), "AI", fill="white", font=font)
     return img
 
 # ---------------------------------------------------------------------------
@@ -196,13 +196,13 @@ def main():
         pystray.MenuItem("退出", _quit_app),
     )
     tray_icon = pystray.Icon(
-        "charging-dashboard",
+        "ai-db-query",
         icon_img,
-        "Charging Dashboard",
+        "AI DB Query",
         menu,
     )
 
-    logger.info("Charging Dashboard launcher started (tray icon visible).")
+    logger.info("AI DB Query launcher started (tray icon visible).")
     tray_icon.run()
 
 
