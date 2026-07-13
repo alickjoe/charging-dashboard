@@ -961,34 +961,6 @@ export default function NLQueryPage() {
                   overflowX: 'auto',
                   minWidth: 0,
                 }}>
-                  {/* Phase indicator bar */}
-                  {querying && streamPhase !== 'idle' && (() => {
-                    const phaseLabel =
-                      streamPhase === 'connecting' ? t('block.phaseConnecting') :
-                      streamPhase === 'thinking' ? t('block.phaseThinking') :
-                      streamPhase === 'executing' ? t('block.phaseExecuting') :
-                      streamPhase === 'error' ? t('chat.queryFailed') :
-                      t('block.thinking');
-                    return (
-                      <div style={{
-                        display: 'flex', alignItems: 'center', gap: 8,
-                        marginBottom: 12, padding: '6px 12px',
-                        background: '#f6ffed', borderRadius: 6,
-                        border: '1px solid #b7eb8f',
-                      }}>
-                        <Spin size="small" />
-                        <Text style={{ fontSize: 13, color: '#52c41a', fontWeight: 500 }}>
-                          {phaseLabel}
-                        </Text>
-                        {elapsedSeconds > 0 && (
-                          <Text type="secondary" style={{ fontSize: 12, marginLeft: 'auto' }}>
-                            {t('chat.elapsed', { time: elapsedSeconds.toFixed(1) })}
-                          </Text>
-                        )}
-                      </div>
-                    );
-                  })()}
-
                   {streamingBlocks.map((block) => (
                     <MemoBlockView key={block.key} block={block} />
                   ))}
@@ -1023,6 +995,35 @@ export default function NLQueryPage() {
 
           <div ref={chatEndRef} />
         </div>
+
+        {/* Status Bar */}
+        {querying && streamPhase !== 'idle' && (() => {
+          const phaseLabel =
+            streamPhase === 'connecting' ? t('block.phaseConnecting') :
+            streamPhase === 'thinking' ? t('block.phaseThinking') :
+            streamPhase === 'executing' ? t('block.phaseExecuting') :
+            streamPhase === 'error' ? t('chat.queryFailed') :
+            t('block.thinking');
+          return (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '6px 24px',
+              background: '#f6ffed',
+              borderTop: '1px solid #b7eb8f',
+              borderBottom: '1px solid #b7eb8f',
+            }}>
+              <Spin size="small" />
+              <Text style={{ fontSize: 13, color: '#52c41a', fontWeight: 500 }}>
+                {phaseLabel}
+              </Text>
+              {elapsedSeconds > 0 && (
+                <Text type="secondary" style={{ fontSize: 12, marginLeft: 'auto' }}>
+                  {t('chat.elapsed', { time: elapsedSeconds.toFixed(1) })}
+                </Text>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Input Area */}
         <div style={{
