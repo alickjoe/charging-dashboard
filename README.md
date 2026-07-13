@@ -1,6 +1,6 @@
-# Charging Dashboard
+# AI DB Query
 
-EV 充电桩数据看板 — 多数据源 PostgreSQL 数据库浏览器与图表展示。
+AI 数据库查询工具 — 多数据源 PostgreSQL 数据库浏览器与图表展示。
 
 ## 技术栈
 

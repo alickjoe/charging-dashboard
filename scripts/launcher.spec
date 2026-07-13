@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec for the system-tray launcher (ChargingDashboard.exe)."""
+"""PyInstaller spec for the system-tray launcher (AIDBQuery.exe)."""
 
 a = Analysis(
     ['../launcher.py'],
@@ -31,7 +31,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='ChargingDashboard',
+    name='AIDBQuery',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

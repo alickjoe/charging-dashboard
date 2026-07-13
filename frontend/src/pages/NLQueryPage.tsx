@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, memo, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Select, Input, Button, Card, Space, Spin, Alert, Typography,
@@ -24,7 +24,9 @@ import { useLanguageStore } from '../i18n/store';
 const { TextArea } = Input;
 const { Paragraph, Text } = Typography;
 
-// ─── Block Types ─────────────────────────────────────────────────
+// ─── Phase & Block Types ─────────────────────────────────────────
+
+type StreamPhase = 'idle' | 'connecting' | 'thinking' | 'executing' | 'done' | 'error';
 
 type StreamBlockType = 'think' | 'sql' | 'result' | 'error';
 
@@ -284,6 +286,8 @@ function BlockView({ block }: { block: StreamBlock }) {
   }
 }
 
+const MemoBlockView = memo(BlockView);
+
 // ─── Parse answer_blocks JSON ─────────────────────────────────────
 
 function parseAnswerBlocks(raw: string): StreamBlock[] {
@@ -337,9 +341,16 @@ export default function NLQueryPage() {
   const [doneMessage, setDoneMessage] = useState('');
   const [llmTime, setLlmTime] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [streamPhase, setStreamPhase] = useState<StreamPhase>('idle');
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const blockKeyRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  // Throttle refs for smooth streaming
+  const thinkBufferRef = useRef('');
+  const flushTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const elapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startTimeRef = useRef(0);
 
   // ── Skill selection ──
   const [selectedSkillIds, setSelectedSkillIds] = useState<number[]>([]);
@@ -415,16 +426,51 @@ export default function NLQueryPage() {
     setDoneMessage('');
     setLlmTime(null);
     setError(null);
+    setStreamPhase('idle');
+    setElapsedSeconds(0);
     blockKeyRef.current = 0;
+    thinkBufferRef.current = '';
   };
 
-  const flushThink = useCallback((text: string) => {
-    if (!text.trim()) return;
-    setStreamingBlocks((prev) => [
-      ...prev,
-      { key: blockKeyRef.current++, type: 'think', content: text },
-    ]);
-    setStreamingThink('');
+  // ── Flush / Timer helpers ──
+  const startFlushTimer = useCallback(() => {
+    if (flushTimerRef.current) return;
+    flushTimerRef.current = setInterval(() => {
+      const buf = thinkBufferRef.current;
+      if (buf) {
+        thinkBufferRef.current = '';
+        setStreamingThink((prev) => prev + buf);
+      }
+    }, 50);
+  }, []);
+
+  const stopFlushTimer = useCallback(() => {
+    if (flushTimerRef.current) {
+      clearInterval(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+    // Flush any remaining buffer
+    const buf = thinkBufferRef.current;
+    if (buf) {
+      thinkBufferRef.current = '';
+      setStreamingThink((prev) => prev + buf);
+    }
+  }, []);
+
+  const startElapsedTimer = useCallback(() => {
+    startTimeRef.current = Date.now();
+    setElapsedSeconds(0);
+    if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
+    elapsedTimerRef.current = setInterval(() => {
+      setElapsedSeconds((Date.now() - startTimeRef.current) / 1000);
+    }, 200);
+  }, []);
+
+  const stopElapsedTimer = useCallback(() => {
+    if (elapsedTimerRef.current) {
+      clearInterval(elapsedTimerRef.current);
+      elapsedTimerRef.current = null;
+    }
   }, []);
 
   const handleSend = () => {
@@ -445,6 +491,25 @@ export default function NLQueryPage() {
 
     setQuerying(true);
     resetStreamState();
+    setStreamPhase('connecting');
+    startFlushTimer();
+    startElapsedTimer();
+
+    // Helper to flush think buffer into streamingBlocks before phase change
+    const flushBufferToBlocks = () => {
+      const buf = thinkBufferRef.current;
+      thinkBufferRef.current = '';
+      setStreamingThink((prev) => {
+        const combined = prev + buf;
+        if (combined.trim()) {
+          setStreamingBlocks((b) => [
+            ...b,
+            { key: blockKeyRef.current++, type: 'think', content: combined },
+          ]);
+        }
+        return '';
+      });
+    };
 
     abortRef.current = executeNLQueryStream(
       {
@@ -458,24 +523,19 @@ export default function NLQueryPage() {
       (event: SSEEvent) => {
         switch (event.type) {
           case 'think':
-            setStreamingThink((prev) => prev + (event.content || ''));
+            setStreamPhase('thinking');
+            thinkBufferRef.current += (event.content || '');
             break;
           case 'sql':
-            setStreamingThink((prev) => {
-              if (prev.trim()) {
-                setStreamingBlocks((b) => [
-                  ...b,
-                  { key: blockKeyRef.current++, type: 'think', content: prev },
-                ]);
-              }
-              return '';
-            });
+            setStreamPhase('executing');
+            flushBufferToBlocks();
             setStreamingBlocks((prev) => [
               ...prev,
               { key: blockKeyRef.current++, type: 'sql', content: event.content || '' },
             ]);
             break;
           case 'result':
+            setStreamPhase('executing');
             setStreamingBlocks((prev) => [
               ...prev,
               {
@@ -489,21 +549,15 @@ export default function NLQueryPage() {
             ]);
             break;
           case 'error':
+            setStreamPhase('error');
             setStreamingBlocks((prev) => [
               ...prev,
               { key: blockKeyRef.current++, type: 'error', content: event.message || '' },
             ]);
             break;
           case 'done':
-            setStreamingThink((prev) => {
-              if (prev.trim()) {
-                setStreamingBlocks((b) => [
-                  ...b,
-                  { key: blockKeyRef.current++, type: 'think', content: prev },
-                ]);
-              }
-              return '';
-            });
+            setStreamPhase('done');
+            flushBufferToBlocks();
             setDoneMessage(event.message || '');
             if (event.llm_time_ms) setLlmTime(event.llm_time_ms);
             // Set active conversation from done event
@@ -515,8 +569,11 @@ export default function NLQueryPage() {
       },
       (err: string) => {
         setError(err);
+        setStreamPhase('error');
       },
       () => {
+        stopFlushTimer();
+        stopElapsedTimer();
         setQuerying(false);
         // Refresh conversation list after query completes
         queryClient.invalidateQueries({ queryKey: ['conversations'] });
@@ -526,15 +583,30 @@ export default function NLQueryPage() {
 
   const handleStop = () => {
     abortRef.current?.abort();
+    stopFlushTimer();
+    stopElapsedTimer();
     setQuerying(false);
-    if (streamingThink.trim()) {
-      flushThink(streamingThink);
-    }
+    setStreamPhase('idle');
+    // Flush think buffer + streamingThink to blocks
+    const buf = thinkBufferRef.current;
+    thinkBufferRef.current = '';
+    setStreamingThink((prev) => {
+      const combined = prev + buf;
+      if (combined.trim()) {
+        setStreamingBlocks((b) => [
+          ...b,
+          { key: blockKeyRef.current++, type: 'think', content: combined },
+        ]);
+      }
+      return '';
+    });
   };
 
   const handleNewChat = () => {
     // Cancel any ongoing query
     abortRef.current?.abort();
+    stopFlushTimer();
+    stopElapsedTimer();
     setQuerying(false);
     setActiveConvId(null);
     setActiveConvMeta(null);
@@ -549,6 +621,8 @@ export default function NLQueryPage() {
   const handleSelectConv = (conv: Conversation) => {
     if (querying) {
       abortRef.current?.abort();
+      stopFlushTimer();
+      stopElapsedTimer();
       setQuerying(false);
     }
     setActiveConvId(conv.id);
@@ -596,6 +670,16 @@ export default function NLQueryPage() {
 
   // ── Merge historic + streaming messages for display ──
   const displayMessages = [...messages];
+
+  // ── Memoized streaming think node to avoid re-parsing on elapsed timer ticks ──
+  const streamingThinkNode = useMemo(() => {
+    if (!streamingThink) return null;
+    return (
+      <div style={{ marginBottom: 16 }}>
+        <RenderMarkdown text={streamingThink} />
+      </div>
+    );
+  }, [streamingThink]);
 
   return (
     <div style={{ display: 'flex', height: 'calc(100vh - 140px)', gap: 0 }}>
@@ -877,23 +961,46 @@ export default function NLQueryPage() {
                   overflowX: 'auto',
                   minWidth: 0,
                 }}>
+                  {/* Phase indicator bar */}
+                  {querying && streamPhase !== 'idle' && (() => {
+                    const phaseLabel =
+                      streamPhase === 'connecting' ? t('block.phaseConnecting') :
+                      streamPhase === 'thinking' ? t('block.phaseThinking') :
+                      streamPhase === 'executing' ? t('block.phaseExecuting') :
+                      streamPhase === 'error' ? t('chat.queryFailed') :
+                      t('block.thinking');
+                    return (
+                      <div style={{
+                        display: 'flex', alignItems: 'center', gap: 8,
+                        marginBottom: 12, padding: '6px 12px',
+                        background: '#f6ffed', borderRadius: 6,
+                        border: '1px solid #b7eb8f',
+                      }}>
+                        <Spin size="small" />
+                        <Text style={{ fontSize: 13, color: '#52c41a', fontWeight: 500 }}>
+                          {phaseLabel}
+                        </Text>
+                        {elapsedSeconds > 0 && (
+                          <Text type="secondary" style={{ fontSize: 12, marginLeft: 'auto' }}>
+                            {t('chat.elapsed', { time: elapsedSeconds.toFixed(1) })}
+                          </Text>
+                        )}
+                      </div>
+                    );
+                  })()}
+
                   {streamingBlocks.map((block) => (
-                    <BlockView key={block.key} block={block} />
+                    <MemoBlockView key={block.key} block={block} />
                   ))}
 
-                  {streamingThink && (
-                    <div style={{ marginBottom: 16 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                        <Spin size="small" />
-                        <Text type="secondary" style={{ fontSize: 13 }}>{t('block.thinking')}</Text>
-                      </div>
-                      <RenderMarkdown text={streamingThink} />
-                    </div>
-                  )}
+                  {streamingThinkNode}
 
                   {querying && streamingBlocks.length === 0 && !streamingThink && (
                     <div style={{ textAlign: 'center', padding: 16 }}>
-                      <Spin size="small" tip={t('block.aiThinking')} />
+                      <Spin />
+                      <div style={{ marginTop: 8 }}>
+                        <Text type="secondary">{t('block.phaseConnecting')}</Text>
+                      </div>
                     </div>
                   )}
 
