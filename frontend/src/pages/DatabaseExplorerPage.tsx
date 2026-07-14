@@ -16,7 +16,7 @@ import {
   Input,
   message,
 } from 'antd';
-import { BarChartOutlined, TableOutlined, CodeOutlined } from '@ant-design/icons';
+import { BarChartOutlined, TableOutlined, CodeOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from '@ant-design/icons';
 import {
   fetchSchemas,
   fetchTables,
@@ -42,6 +42,14 @@ export default function DatabaseExplorerPage() {
   const [pageSize, setPageSize] = useState(50);
   const [timeFrom, setTimeFrom] = useState<string | undefined>();
   const [timeTo, setTimeTo] = useState<string | undefined>();
+
+  // Sidebar toggle for responsive layout
+  const [sidebarVisible, setSidebarVisible] = useState(window.innerWidth >= 768);
+  useEffect(() => {
+    const handleResize = () => setSidebarVisible(window.innerWidth >= 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // Annotation editing state
   const [editingTableAnnotation, setEditingTableAnnotation] = useState('');
@@ -259,8 +267,17 @@ export default function DatabaseExplorerPage() {
         </Button>
       </Space>
 
-      <div style={{ display: 'flex', gap: 16 }}>
+      <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+        {/* Sidebar toggle button */}
+        <Button
+          type="text"
+          icon={sidebarVisible ? <MenuFoldOutlined /> : <MenuUnfoldOutlined />}
+          onClick={() => setSidebarVisible(!sidebarVisible)}
+          title={sidebarVisible ? t('common.collapse') : t('common.expand')}
+        />
+
         {/* Table List */}
+        {sidebarVisible && (
         <Card
           title={t('database.tables', { count: tables?.length || 0 })}
           style={{ width: 280, flexShrink: 0 }}
@@ -290,10 +307,11 @@ export default function DatabaseExplorerPage() {
                   />
                 </List.Item>
               )}
-              style={{ maxHeight: 500, overflow: 'auto' }}
+              style={{ maxHeight: 'calc(100vh - 250px)', overflow: 'auto' }}
             />
           )}
         </Card>
+        )}
 
         {/* Data Panel */}
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -416,7 +434,7 @@ export default function DatabaseExplorerPage() {
                                 borderBottom: '1px solid #f0f0f0',
                               }}
                             >
-                              <div style={{ width: 180, flexShrink: 0 }}>
+                              <div style={{ width: 180, flexShrink: 0, minWidth: 120 }}>
                                 <Space size={4}>
                                   <strong>{col.column_name}</strong>
                                   <Tag color="blue" style={{ margin: 0 }}>

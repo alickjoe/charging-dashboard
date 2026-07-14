@@ -19,7 +19,9 @@
     "delete": "Delete",
     "confirm": "Confirm",
     "loading": "Loading...",
-    "loadError": "Load Failed"
+    "loadError": "Load Failed",
+    "collapse": "Collapse",
+    "expand": "Expand"
   },
   "status": {
     "connected": "Connected",

@@ -1,4 +1,4 @@
-import { Card, Tag, Button, Space, message, Popconfirm } from 'antd';
+import { Card, Tag, Button, Space, Popconfirm } from 'antd';
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
@@ -16,6 +16,7 @@ import { deleteConnection } from '../api/connections-admin';
 import type { ConnectionInfo } from '../types';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useToast } from './Toast';
 
 interface ConnectionCardProps {
   connection: ConnectionInfo;
@@ -27,6 +28,7 @@ export default function ConnectionCard({ connection, onEdit }: ConnectionCardPro
   const queryClient = useQueryClient();
   const [testing, setTesting] = useState(false);
   const { t, i18n } = useTranslation();
+  const toast = useToast();
 
   const statusConfig: Record<string, { color: string; icon: React.ReactNode; text: string }> = {
     connected: { color: 'green', icon: <CheckCircleOutlined />, text: t('status.connected') },
@@ -42,9 +44,9 @@ export default function ConnectionCard({ connection, onEdit }: ConnectionCardPro
     try {
       const result = await testConnection(connection.name);
       if (result.status === 'connected') {
-        message.success(`${result.message} (${result.latency_ms}ms)`);
+        toast.success(`${result.message} (${result.latency_ms}ms)`);
       } else {
-        message.error(result.message);
+        toast.error(result.message);
       }
       // Update status in cache directly so the card reflects the result
       queryClient.setQueryData<ConnectionInfo[]>(
@@ -57,7 +59,7 @@ export default function ConnectionCard({ connection, onEdit }: ConnectionCardPro
           )
       );
     } catch {
-      message.error(t('msg.testFail'));
+      toast.error(t('msg.testFail'));
     } finally {
       setTesting(false);
     }
@@ -66,10 +68,10 @@ export default function ConnectionCard({ connection, onEdit }: ConnectionCardPro
   const handleDelete = async () => {
     try {
       await deleteConnection(connection.name);
-      message.success(t('msg.deleted'));
+      toast.success(t('msg.deleted'));
       queryClient.invalidateQueries({ queryKey: ['connections'] });
     } catch (err: any) {
-      message.error(err?.response?.data?.detail || t('msg.deleteFail'));
+      toast.error(err?.response?.data?.detail || t('msg.deleteFail'));
     }
   };
 
@@ -108,7 +110,7 @@ export default function ConnectionCard({ connection, onEdit }: ConnectionCardPro
             {new Date(connection.last_checked).toLocaleString(i18n.language === 'zh' ? 'zh-CN' : 'en-US')}
           </div>
         )}
-        <Space style={{ marginTop: 8 }}>
+        <Space wrap style={{ marginTop: 8 }}>
           <Button
             type="primary"
             icon={<EyeOutlined />}

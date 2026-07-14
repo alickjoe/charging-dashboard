@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Button, Input, Card, Space, Spin, Typography,
@@ -7,6 +7,7 @@ import {
 import {
   PlusOutlined, DeleteOutlined, ThunderboltOutlined,
   HistoryOutlined, BulbOutlined,
+  MenuFoldOutlined, MenuUnfoldOutlined,
 } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import { useLanguageStore } from '../i18n/store';
@@ -41,6 +42,14 @@ export default function SkillsPage() {
   });
   const [saving, setSaving] = useState(false);
   const [enhancing, setEnhancing] = useState<'system' | 'user' | null>(null);
+
+  // Sidebar toggle for responsive layout
+  const [sidebarVisible, setSidebarVisible] = useState(window.innerWidth >= 768);
+  useEffect(() => {
+    const handleResize = () => setSidebarVisible(window.innerWidth >= 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // ── History modal ──
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -141,8 +150,18 @@ export default function SkillsPage() {
   }, [selectedQuestions]);
 
   return (
-    <div style={{ display: 'flex', height: 'calc(100vh - 180px)', gap: 0 }}>
+    <div style={{ display: 'flex', minHeight: 'calc(100vh - 180px)', gap: 0 }}>
+      {/* Sidebar toggle button */}
+      <Button
+        type="text"
+        icon={sidebarVisible ? <MenuFoldOutlined /> : <MenuUnfoldOutlined />}
+        onClick={() => setSidebarVisible(!sidebarVisible)}
+        title={sidebarVisible ? t('common.collapse') : t('common.expand')}
+        style={{ flexShrink: 0, marginTop: 4 }}
+      />
+
       {/* ─── Left: Skills List ─── */}
+      {sidebarVisible && (
       <div style={{
         width: 280, minWidth: 280,
         borderRight: '1px solid #f0f0f0',
@@ -229,6 +248,7 @@ export default function SkillsPage() {
           )}
         </div>
       </div>
+      )}
 
       {/* ─── Right: Edit Form ─── */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px 24px' }}>

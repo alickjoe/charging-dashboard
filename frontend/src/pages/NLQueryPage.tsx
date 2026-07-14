@@ -8,6 +8,7 @@ import {
   SendOutlined, StopOutlined, BarChartOutlined,
   CodeOutlined, TableOutlined,
   PlusOutlined, DeleteOutlined, MessageOutlined,
+  MenuFoldOutlined, MenuUnfoldOutlined,
 } from '@ant-design/icons';
 import { fetchConnections } from '../api/connections';
 import { fetchLLMConfigs, executeNLQueryStream } from '../api/llm';
@@ -357,6 +358,14 @@ export default function NLQueryPage() {
   const [showSkillPicker, setShowSkillPicker] = useState(false);
   const [slashFilter, setSlashFilter] = useState('');
 
+  // Sidebar toggle for responsive layout
+  const [sidebarVisible, setSidebarVisible] = useState(window.innerWidth >= 768);
+  useEffect(() => {
+    const handleResize = () => setSidebarVisible(window.innerWidth >= 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
   // ── Data fetching ──
   const { data: connections, isLoading: loadingConns } = useQuery({
     queryKey: ['connections'],
@@ -682,8 +691,18 @@ export default function NLQueryPage() {
   }, [streamingThink]);
 
   return (
-    <div style={{ display: 'flex', height: 'calc(100vh - 140px)', gap: 0 }}>
+    <div style={{ display: 'flex', minHeight: 'calc(100vh - 180px)', gap: 0 }}>
+      {/* Sidebar toggle button */}
+      <Button
+        type="text"
+        icon={sidebarVisible ? <MenuFoldOutlined /> : <MenuUnfoldOutlined />}
+        onClick={() => setSidebarVisible(!sidebarVisible)}
+        title={sidebarVisible ? t('common.collapse') : t('common.expand')}
+        style={{ flexShrink: 0, marginTop: 4 }}
+      />
+
       {/* ─── Left Sidebar: Conversation List ─── */}
+      {sidebarVisible && (
       <div style={{
         width: 300, minWidth: 300,
         borderRight: '1px solid #f0f0f0',
@@ -789,6 +808,7 @@ export default function NLQueryPage() {
           )}
         </div>
       </div>
+      )}
 
       {/* ─── Right Area: Chat View ─── */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
@@ -806,7 +826,7 @@ export default function NLQueryPage() {
           ) : (
             <>
               <Text strong style={{ fontSize: 15 }}>{t('chat.newSession')}</Text>
-              <Space wrap>
+              <Space wrap style={{ flexWrap: 'wrap' }}>
                 <span style={{ fontSize: 13, color: '#666' }}>{t('chat.dbLabel')}</span>
                 <Select
                   placeholder={t('chat.selectDB')}
@@ -875,7 +895,7 @@ export default function NLQueryPage() {
               {msg.role === 'user' && (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', marginBottom: 8 }}>
                 <div style={{
-                  maxWidth: '75%',
+                  maxWidth: 'calc(100% - 40px)',
                   background: '#1890ff', color: '#fff',
                   borderRadius: '12px 12px 4px 12px',
                   padding: '10px 16px',
@@ -913,7 +933,7 @@ export default function NLQueryPage() {
               {msg.role === 'assistant' && parseAnswerBlocks(msg.answer_blocks).length > 0 && (
                 <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
                   <div style={{
-                    maxWidth: '85%',
+                    maxWidth: 'calc(100% - 40px)',
                     background: '#fff',
                     borderRadius: '12px 12px 12px 4px',
                     padding: '12px 16px',
@@ -939,7 +959,7 @@ export default function NLQueryPage() {
               {/* User question bubble for streaming */}
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
                 <div style={{
-                  maxWidth: '75%',
+                  maxWidth: 'calc(100% - 40px)',
                   background: '#1890ff', color: '#fff',
                   borderRadius: '12px 12px 4px 12px',
                   padding: '10px 16px',
@@ -953,7 +973,7 @@ export default function NLQueryPage() {
               {/* AI streaming bubble */}
               <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
                 <div style={{
-                  maxWidth: '85%',
+                  maxWidth: 'calc(100% - 40px)',
                   background: '#fff',
                   borderRadius: '12px 12px 12px 4px',
                   padding: '12px 16px',

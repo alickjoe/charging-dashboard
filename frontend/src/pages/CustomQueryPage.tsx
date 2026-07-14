@@ -21,6 +21,8 @@ import {
   SaveOutlined,
   DeleteOutlined,
   ClearOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import {
@@ -58,6 +60,14 @@ export default function CustomQueryPage() {
   const textareaRef = useRef<any>(null);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cursorRef = useRef(0);
+
+  // Sidebar toggle for responsive layout
+  const [sidebarVisible, setSidebarVisible] = useState(window.innerWidth >= 768);
+  useEffect(() => {
+    const handleResize = () => setSidebarVisible(window.innerWidth >= 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   const savedQueriesKey = ['savedQueries', connectionName];
 
@@ -285,8 +295,17 @@ export default function CustomQueryPage() {
         style={{ marginBottom: 16 }}
       />
 
-      <div style={{ display: 'flex', gap: 16 }}>
+      <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+        {/* Sidebar toggle button */}
+        <Button
+          type="text"
+          icon={sidebarVisible ? <MenuFoldOutlined /> : <MenuUnfoldOutlined />}
+          onClick={() => setSidebarVisible(!sidebarVisible)}
+          title={sidebarVisible ? t('common.collapse') : t('common.expand')}
+        />
+
         {/* Saved Queries Panel */}
+        {sidebarVisible && (
         <Card
           title={t('customQuery.savedQueries')}
           style={{ width: 280, flexShrink: 0 }}
@@ -363,10 +382,11 @@ export default function CustomQueryPage() {
                   />
                 </List.Item>
               )}
-              style={{ maxHeight: 500, overflow: 'auto' }}
+              style={{ maxHeight: 'calc(100vh - 250px)', overflow: 'auto' }}
             />
           )}
         </Card>
+        )}
 
         {/* Main Editor Area */}
         <div style={{ flex: 1, minWidth: 0 }}>

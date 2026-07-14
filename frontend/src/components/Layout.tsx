@@ -78,6 +78,7 @@ export default function Layout({ children }: LayoutProps) {
         collapsible
         collapsed={collapsed}
         onCollapse={setCollapsed}
+        breakpoint="lg"
         theme="dark"
         style={{ overflow: 'auto' }}
       >
@@ -160,11 +161,12 @@ export default function Layout({ children }: LayoutProps) {
         </Header>
         <Content
           style={{
-            margin: 24,
-            padding: 24,
+            margin: '12px',
+            padding: '12px',
             background: token.colorBgContainer,
             borderRadius: token.borderRadiusLG,
             minHeight: 280,
+            overflow: 'auto',
           }}
         >
           {children}

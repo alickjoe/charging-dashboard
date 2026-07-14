@@ -1,13 +1,15 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Table, Button, Modal, Form, Input, InputNumber, Switch, Space, Tag, Popconfirm, message, Spin, Alert } from 'antd';
+import { Table, Button, Modal, Form, Input, InputNumber, Switch, Space, Tag, Popconfirm, Spin, Alert } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, CheckCircleOutlined } from '@ant-design/icons';
 import { fetchLLMConfigs, createLLMConfig, updateLLMConfig, deleteLLMConfig, testLLMConfig } from '../api/llm';
 import type { LLMConfig, LLMConfigFormData } from '../types';
 import { useTranslation } from 'react-i18next';
+import { useToast } from '../components/Toast';
 
 export default function LLMConfigPage() {
   const { t } = useTranslation();
+  const toast = useToast();
   const queryClient = useQueryClient();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingConfig, setEditingConfig] = useState<LLMConfig | null>(null);
@@ -44,10 +46,10 @@ export default function LLMConfigPage() {
   const handleDelete = async (id: number) => {
     try {
       await deleteLLMConfig(id);
-      message.success(t('msg.deleted'));
+      toast.success(t('msg.deleted'));
       queryClient.invalidateQueries({ queryKey: ['llm-configs'] });
     } catch (err: any) {
-      message.error(err?.response?.data?.detail || t('msg.deleteFail'));
+      toast.error(err?.response?.data?.detail || t('msg.deleteFail'));
     }
   };
 
@@ -55,13 +57,15 @@ export default function LLMConfigPage() {
     setTestingId(id);
     try {
       const result = await testLLMConfig(id);
+      console.log('[LLM Test] result:', result);
       if (result.status === 'ok') {
-        message.success(`${result.message} (${result.latency_ms}ms)`);
+        toast.success(`${result.message} (${result.latency_ms}ms)`, 5);
       } else {
-        message.error(result.message);
+        toast.error(result.message, 5);
       }
-    } catch {
-      message.error(t('msg.testFail'));
+    } catch (err: any) {
+      console.error('[LLM Test] error:', err);
+      toast.error(err?.response?.data?.detail || t('msg.testFail'), 5);
     } finally {
       setTestingId(null);
     }
@@ -75,16 +79,16 @@ export default function LLMConfigPage() {
         const payload: Partial<LLMConfigFormData> = { ...values };
         if (!payload.api_key) delete payload.api_key; // don't send empty key
         await updateLLMConfig(editingConfig.id, payload);
-        message.success(t('msg.updated'));
+        toast.success(t('msg.updated'));
       } else {
         await createLLMConfig(values);
-        message.success(t('msg.created'));
+        toast.success(t('msg.created'));
       }
       queryClient.invalidateQueries({ queryKey: ['llm-configs'] });
       setModalOpen(false);
     } catch (err: any) {
       const msg = err?.response?.data?.detail || err?.message || t('msg.operationFail');
-      message.error(msg);
+      toast.error(msg);
     } finally {
       setSaving(false);
     }
@@ -111,7 +115,7 @@ export default function LLMConfigPage() {
     {
       title: t('llm.actions'),
       key: 'actions',
-      width: 280,
+      width: 240,
       render: (_: unknown, record: LLMConfig) => (
         <Space>
           <Button size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>{t('common.edit')}</Button>
@@ -148,6 +152,7 @@ export default function LLMConfigPage() {
           columns={columns}
           rowKey="id"
           pagination={false}
+          scroll={{ x: 'max-content' }}
           locale={{ emptyText: t('llm.empty') }}
         />
       )}

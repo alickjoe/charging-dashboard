@@ -103,7 +103,7 @@ export default function ChartViewPage() {
         style={{ marginBottom: 16 }}
       />
 
-      <Card title={t('chart.title')} style={{ marginBottom: 16 }}>
+      <Card title={t('chart.title')} style={{ marginBottom: 16, overflow: 'hidden' }}>
         <Space direction="vertical" style={{ width: '100%' }} size="middle">
           <Space wrap>
             <span>{t('chart.xAxis')}</span>
@@ -111,7 +111,7 @@ export default function ChartViewPage() {
               value={xColumn}
               onChange={setXColumn}
               placeholder={t('chart.selectX')}
-              style={{ width: 250 }}
+              style={{ minWidth: 180, maxWidth: 250, width: '100%' }}
               options={columnOptions}
               loading={columnsLoading}
               showSearch
@@ -121,7 +121,7 @@ export default function ChartViewPage() {
               value={yColumn}
               onChange={setYColumn}
               placeholder={t('chart.selectY')}
-              style={{ width: 250 }}
+              style={{ minWidth: 180, maxWidth: 250, width: '100%' }}
               options={columnOptions}
               loading={columnsLoading}
               showSearch

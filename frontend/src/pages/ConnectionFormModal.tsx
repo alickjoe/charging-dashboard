@@ -1,9 +1,10 @@
-import { Modal, Form, Input, InputNumber, Select, Button, message } from 'antd';
+import { Modal, Form, Input, InputNumber, Select, Button } from 'antd';
 import { useState } from 'react';
 import { createConnection, updateConnection, testTempConnection } from '../api/connections-admin';
 import type { ConnectionInfo, CreateConnectionRequest } from '../types';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { useToast } from '../components/Toast';
 
 interface ConnectionFormModalProps {
   open: boolean;
@@ -13,6 +14,7 @@ interface ConnectionFormModalProps {
 
 export default function ConnectionFormModal({ open, editingConnection, onClose }: ConnectionFormModalProps) {
   const { t } = useTranslation();
+  const toast = useToast();
   const [form] = Form.useForm<CreateConnectionRequest>();
   const [saving, setSaving] = useState(false);
   const [testingTemp, setTestingTemp] = useState(false);
@@ -34,9 +36,9 @@ export default function ConnectionFormModal({ open, editingConnection, onClose }
         query_timeout: values.query_timeout,
       });
       if (result.status === 'connected') {
-        message.success(t('msg.testSuccess', { ms: result.latency_ms }));
+        toast.success(t('msg.testSuccess', { ms: result.latency_ms }));
       } else {
-        message.error(result.message);
+        toast.error(result.message);
       }
     } catch {
       // validation errors ignored
@@ -51,17 +53,17 @@ export default function ConnectionFormModal({ open, editingConnection, onClose }
       setSaving(true);
       if (isEdit) {
         await updateConnection(editingConnection!.name, values);
-        message.success(t('msg.updated'));
+        toast.success(t('msg.updated'));
       } else {
         await createConnection(values);
-        message.success(t('msg.created'));
+        toast.success(t('msg.created'));
       }
       queryClient.invalidateQueries({ queryKey: ['connections'] });
       form.resetFields();
       onClose();
     } catch (err: any) {
       const msg = err?.response?.data?.detail || err?.message || t('msg.operationFail');
-      message.error(msg);
+      toast.error(msg);
     } finally {
       setSaving(false);
     }
