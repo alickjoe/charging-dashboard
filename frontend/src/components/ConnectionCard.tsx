@@ -44,9 +44,9 @@ export default function ConnectionCard({ connection, onEdit }: ConnectionCardPro
     try {
       const result = await testConnection(connection.name);
       if (result.status === 'connected') {
-        toast.success(`${result.message} (${result.latency_ms}ms)`);
+        toast.success(t('msg.testSuccess', { ms: result.latency_ms }));
       } else {
-        toast.error(result.message);
+        toast.error(t('msg.testFail'));
       }
       // Update status in cache directly so the card reflects the result
       queryClient.setQueryData<ConnectionInfo[]>(

@@ -165,11 +165,15 @@ export default function Layout({ children }: LayoutProps) {
             padding: '12px',
             background: token.colorBgContainer,
             borderRadius: token.borderRadiusLG,
-            minHeight: 280,
-            overflow: 'auto',
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
           }}
         >
-          {children}
+          <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
+            {children}
+          </div>
         </Content>
       </AntLayout>
     </AntLayout>
