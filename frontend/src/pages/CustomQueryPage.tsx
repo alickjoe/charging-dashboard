@@ -281,7 +281,7 @@ export default function CustomQueryPage() {
     }) || [];
 
   return (
-    <div>
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <Breadcrumb
         items={[
           { title: <a href="/connections">{t('breadcrumb.connections')}</a> },
@@ -292,10 +292,10 @@ export default function CustomQueryPage() {
           },
           { title: t('customQuery.title') },
         ]}
-        style={{ marginBottom: 16 }}
+        style={{ marginBottom: 12, flexShrink: 0 }}
       />
 
-      <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', gap: 16 }}>
         {/* Sidebar toggle button */}
         <Button
           type="text"
@@ -308,8 +308,8 @@ export default function CustomQueryPage() {
         {sidebarVisible && (
         <Card
           title={t('customQuery.savedQueries')}
-          style={{ width: 280, flexShrink: 0 }}
-          bodyStyle={{ padding: 0 }}
+          style={{ width: 280, flexShrink: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+          bodyStyle={{ padding: 0, flex: 1, overflow: 'hidden' }}
           extra={
             <Button
               type="text"
@@ -382,14 +382,14 @@ export default function CustomQueryPage() {
                   />
                 </List.Item>
               )}
-              style={{ maxHeight: 'calc(100vh - 250px)', overflow: 'auto' }}
+              style={{ flex: 1, overflow: 'auto' }}
             />
           )}
         </Card>
         )}
 
         {/* Main Editor Area */}
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ flex: 1, minWidth: 0, overflowY: 'auto' }}>
           <Space direction="vertical" style={{ width: '100%' }} size="middle">
             {/* Query Name */}
             <Input

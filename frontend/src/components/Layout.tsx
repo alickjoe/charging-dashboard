@@ -171,7 +171,7 @@ export default function Layout({ children }: LayoutProps) {
             overflow: 'hidden',
           }}
         >
-          <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <div style={{ flex: 1, overflow: 'hidden', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
             {children}
           </div>
         </Content>

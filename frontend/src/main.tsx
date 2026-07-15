@@ -10,6 +10,10 @@ import './i18n';
 import { useLanguageStore } from './i18n/store';
 import { ToastProvider } from './components/Toast';
 
+// Prevent body-level scrolling
+document.body.style.margin = '0';
+document.body.style.overflow = 'hidden';
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
