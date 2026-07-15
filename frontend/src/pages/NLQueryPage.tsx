@@ -922,9 +922,10 @@ export default function NLQueryPage() {
           {/* Anchor navigation */}
           {userMessages.length >= 2 && (
             <div style={{
-              position: 'absolute',
-              right: 8,
+              position: 'sticky',
               top: 16,
+              alignSelf: 'flex-end',
+              marginRight: 8,
               zIndex: 10,
               display: 'flex',
               flexDirection: 'column',

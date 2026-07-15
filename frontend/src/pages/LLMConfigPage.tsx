@@ -59,9 +59,9 @@ export default function LLMConfigPage() {
       const result = await testLLMConfig(id);
       console.log('[LLM Test] result:', result);
       if (result.status === 'ok') {
-        toast.success(`${result.message} (${result.latency_ms}ms)`, 5);
+        toast.success(t('msg.testSuccess', { ms: result.latency_ms }), 5);
       } else {
-        toast.error(result.message, 5);
+        toast.error(t('msg.testFail'), 5);
       }
     } catch (err: any) {
       console.error('[LLM Test] error:', err);

@@ -38,7 +38,7 @@ export default function ConnectionFormModal({ open, editingConnection, onClose }
       if (result.status === 'connected') {
         toast.success(t('msg.testSuccess', { ms: result.latency_ms }));
       } else {
-        toast.error(result.message);
+        toast.error(t('msg.testFail'));
       }
     } catch {
       // validation errors ignored
