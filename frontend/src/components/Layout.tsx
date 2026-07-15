@@ -73,7 +73,7 @@ export default function Layout({ children }: LayoutProps) {
   };
 
   return (
-    <AntLayout style={{ minHeight: '100vh' }}>
+    <AntLayout style={{ height: '100vh', overflow: 'hidden' }}>
       <Sider
         collapsible
         collapsed={collapsed}
@@ -171,7 +171,7 @@ export default function Layout({ children }: LayoutProps) {
             overflow: 'hidden',
           }}
         >
-          <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
+          <div style={{ flex: 1, overflow: 'auto', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
             {children}
           </div>
         </Content>
