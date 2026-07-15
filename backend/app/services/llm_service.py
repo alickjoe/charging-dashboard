@@ -5,7 +5,6 @@ import re
 import logging
 
 import httpx
-from tenacity import retry, stop_after_attempt, wait_fixed
 
 from app.database import get_pool
 from app.services.db_explorer_service import list_schemas, list_tables, list_columns

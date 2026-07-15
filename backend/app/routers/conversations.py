@@ -1,6 +1,5 @@
 """API routes for conversation management."""
 
-import json
 import logging
 
 from fastapi import APIRouter, HTTPException

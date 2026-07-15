@@ -7,7 +7,6 @@ automatically restarts crashed processes (up to 3 attempts).
 Designed to be bundled with PyInstaller for the Windows installer.
 """
 
-import json
 import logging
 import os
 import subprocess
