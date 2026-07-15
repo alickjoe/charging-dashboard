@@ -221,7 +221,7 @@ export default function DatabaseExplorerPage() {
   }
 
   return (
-    <div>
+    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
       <Breadcrumb
         items={[
           { title: <a href="/connections">{t('breadcrumb.connections')}</a> },

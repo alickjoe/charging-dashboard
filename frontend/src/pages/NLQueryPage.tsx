@@ -347,6 +347,7 @@ export default function NLQueryPage() {
   const blockKeyRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   // Throttle refs for smooth streaming
   const thinkBufferRef = useRef('');
   const flushTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -690,8 +691,37 @@ export default function NLQueryPage() {
     );
   }, [streamingThink]);
 
+  // ── Anchor navigation ──
+  const userMessages = useMemo(
+    () => displayMessages.filter((m) => m.role === 'user'),
+    [displayMessages],
+  );
+  const [activeAnchor, setActiveAnchor] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (userMessages.length < 2) return;
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            setActiveAnchor(Number((entry.target as HTMLElement).dataset.msgId));
+            break;
+          }
+        }
+      },
+      { root: container, threshold: 0.4 },
+    );
+    userMessages.forEach((m) => {
+      const el = document.getElementById(`msg-${m.id}`);
+      if (el) observer.observe(el);
+    });
+    return () => observer.disconnect();
+  }, [userMessages]);
+
   return (
-    <div style={{ display: 'flex', minHeight: 'calc(100vh - 180px)', gap: 0 }}>
+    <div style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden', gap: 0 }}>
       {/* Sidebar toggle button */}
       <Button
         type="text"
@@ -859,9 +889,12 @@ export default function NLQueryPage() {
         </div>
 
         {/* Messages Area */}
-        <div style={{
+        <div ref={messagesContainerRef} style={{
           flex: 1, overflowY: 'auto', padding: '16px 24px',
           background: '#f5f5f5',
+          position: 'relative',
+          display: 'flex',
+          flexDirection: 'column',
         }}>
           {displayMessages.length === 0 && !querying && !error && (
             <div style={{
@@ -888,12 +921,69 @@ export default function NLQueryPage() {
             />
           )}
 
+          {/* Anchor navigation */}
+          {userMessages.length >= 2 && (
+            <div style={{
+              position: 'sticky',
+              top: 16,
+              alignSelf: 'flex-end',
+              marginRight: 8,
+              zIndex: 10,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 6,
+              background: 'rgba(255,255,255,0.9)',
+              borderRadius: 16,
+              padding: '6px 4px',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
+            }}>
+              {userMessages.map((msg, idx) => (
+                <div
+                  key={msg.id}
+                  onClick={() => {
+                    document.getElementById(`msg-${msg.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                  }}
+                  title={msg.question.substring(0, 60)}
+                  style={{
+                    width: 26,
+                    height: 26,
+                    borderRadius: '50%',
+                    background: activeAnchor === msg.id ? '#1890ff' : '#f0f0f0',
+                    color: activeAnchor === msg.id ? '#fff' : '#888',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    transition: 'all 0.2s',
+                    flexShrink: 0,
+                  }}
+                  onMouseEnter={(e) => {
+                    if (activeAnchor !== msg.id) {
+                      (e.currentTarget as HTMLElement).style.background = '#e6f4ff';
+                      (e.currentTarget as HTMLElement).style.color = '#1890ff';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (activeAnchor !== msg.id) {
+                      (e.currentTarget as HTMLElement).style.background = '#f0f0f0';
+                      (e.currentTarget as HTMLElement).style.color = '#888';
+                    }
+                  }}
+                >
+                  {idx + 1}
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* Historic messages */}
           {displayMessages.map((msg) => (
             <div key={msg.id} style={{ marginBottom: 20 }}>
               {/* User message */}
               {msg.role === 'user' && (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', marginBottom: 8 }}>
+              <div id={`msg-${msg.id}`} data-msg-id={msg.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', marginBottom: 8 }}>
                 <div style={{
                   maxWidth: 'calc(100% - 40px)',
                   background: '#1890ff', color: '#fff',

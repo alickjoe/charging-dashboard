@@ -89,7 +89,7 @@ export default function ChartViewPage() {
   const isReady = xColumn && yColumn;
 
   return (
-    <div>
+    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
       <Breadcrumb
         items={[
           { title: <a href="/connections">{t('breadcrumb.connections')}</a> },

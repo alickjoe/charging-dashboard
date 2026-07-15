@@ -59,7 +59,7 @@ export default function ConnectionListPage() {
   }
 
   return (
-    <div>
+    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
         <h2 style={{ margin: 0 }}>{t('connection.title')}</h2>
         <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>

@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Table, Button, Modal, Form, Input, InputNumber, Switch, Space, Tag, Popconfirm, Spin, Alert } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, CheckCircleOutlined } from '@ant-design/icons';
-import { fetchLLMConfigs, createLLMConfig, updateLLMConfig, deleteLLMConfig, testLLMConfig } from '../api/llm';
+import { Row, Col, Modal, Form, Input, InputNumber, Switch, Button, Spin, Alert } from 'antd';
+import { PlusOutlined } from '@ant-design/icons';
+import { fetchLLMConfigs, createLLMConfig, updateLLMConfig } from '../api/llm';
+import LLMConfigCard from '../components/LLMConfigCard';
 import type { LLMConfig, LLMConfigFormData } from '../types';
 import { useTranslation } from 'react-i18next';
 import { useToast } from '../components/Toast';
@@ -15,7 +16,6 @@ export default function LLMConfigPage() {
   const [editingConfig, setEditingConfig] = useState<LLMConfig | null>(null);
   const [form] = Form.useForm<LLMConfigFormData>();
   const [saving, setSaving] = useState(false);
-  const [testingId, setTestingId] = useState<number | null>(null);
 
   const { data: configs, isLoading, isError } = useQuery({
     queryKey: ['llm-configs'],
@@ -43,41 +43,13 @@ export default function LLMConfigPage() {
     setModalOpen(true);
   };
 
-  const handleDelete = async (id: number) => {
-    try {
-      await deleteLLMConfig(id);
-      toast.success(t('msg.deleted'));
-      queryClient.invalidateQueries({ queryKey: ['llm-configs'] });
-    } catch (err: any) {
-      toast.error(err?.response?.data?.detail || t('msg.deleteFail'));
-    }
-  };
-
-  const handleTest = async (id: number) => {
-    setTestingId(id);
-    try {
-      const result = await testLLMConfig(id);
-      console.log('[LLM Test] result:', result);
-      if (result.status === 'ok') {
-        toast.success(`${result.message} (${result.latency_ms}ms)`, 5);
-      } else {
-        toast.error(result.message, 5);
-      }
-    } catch (err: any) {
-      console.error('[LLM Test] error:', err);
-      toast.error(err?.response?.data?.detail || t('msg.testFail'), 5);
-    } finally {
-      setTestingId(null);
-    }
-  };
-
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields();
       setSaving(true);
       if (editingConfig) {
         const payload: Partial<LLMConfigFormData> = { ...values };
-        if (!payload.api_key) delete payload.api_key; // don't send empty key
+        if (!payload.api_key) delete payload.api_key;
         await updateLLMConfig(editingConfig.id, payload);
         toast.success(t('msg.updated'));
       } else {
@@ -94,49 +66,8 @@ export default function LLMConfigPage() {
     }
   };
 
-  const columns = [
-    { title: t('llm.name'), dataIndex: 'name', key: 'name', width: 150 },
-    { title: t('llm.apiBase'), dataIndex: 'api_base', key: 'api_base', ellipsis: true },
-    {
-      title: t('llm.apiKey'),
-      dataIndex: 'api_key_masked',
-      key: 'api_key_masked',
-      width: 150,
-      render: (v: string) => <code>{v}</code>,
-    },
-    { title: t('llm.model'), dataIndex: 'model', key: 'model', width: 120 },
-    {
-      title: t('llm.default'),
-      dataIndex: 'is_default',
-      key: 'is_default',
-      width: 70,
-      render: (v: boolean) => v ? <Tag color="blue">{t('llm.default')}</Tag> : null,
-    },
-    {
-      title: t('llm.actions'),
-      key: 'actions',
-      width: 240,
-      render: (_: unknown, record: LLMConfig) => (
-        <Space>
-          <Button size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>{t('common.edit')}</Button>
-          <Button
-            size="small"
-            icon={<CheckCircleOutlined />}
-            onClick={() => handleTest(record.id)}
-            loading={testingId === record.id}
-          >
-            {t('llm.test')}
-          </Button>
-          <Popconfirm title={t('llm.deleteConfirm')} onConfirm={() => handleDelete(record.id)} okText={t('common.delete')} cancelText={t('common.cancel')}>
-            <Button size="small" danger icon={<DeleteOutlined />}>{t('common.delete')}</Button>
-          </Popconfirm>
-        </Space>
-      ),
-    },
-  ];
-
   return (
-    <div>
+    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
         <h2 style={{ margin: 0 }}>{t('llm.title')}</h2>
         <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>{t('llm.add')}</Button>
@@ -146,15 +77,20 @@ export default function LLMConfigPage() {
         <div style={{ textAlign: 'center', padding: 80 }}><Spin size="large" /></div>
       ) : isError ? (
         <Alert type="error" message={t('common.loadError')} showIcon />
-      ) : (
-        <Table
-          dataSource={configs}
-          columns={columns}
-          rowKey="id"
-          pagination={false}
-          scroll={{ x: 'max-content' }}
-          locale={{ emptyText: t('llm.empty') }}
+      ) : (!configs || configs.length === 0) ? (
+        <Alert
+          type="info"
+          message={t('llm.empty')}
+          showIcon
         />
+      ) : (
+        <Row gutter={[16, 16]}>
+          {configs.map((cfg) => (
+            <Col xs={24} sm={24} md={12} lg={8} key={cfg.id}>
+              <LLMConfigCard config={cfg} onEdit={handleEdit} />
+            </Col>
+          ))}
+        </Row>
       )}
 
       <Modal

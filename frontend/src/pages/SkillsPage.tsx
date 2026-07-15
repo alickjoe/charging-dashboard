@@ -150,7 +150,7 @@ export default function SkillsPage() {
   }, [selectedQuestions]);
 
   return (
-    <div style={{ display: 'flex', minHeight: 'calc(100vh - 180px)', gap: 0 }}>
+    <div style={{ display: 'flex', flex: 1, minHeight: 0, gap: 0 }}>
       {/* Sidebar toggle button */}
       <Button
         type="text"
