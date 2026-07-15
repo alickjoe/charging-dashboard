@@ -893,6 +893,8 @@ export default function NLQueryPage() {
           flex: 1, overflowY: 'auto', padding: '16px 24px',
           background: '#f5f5f5',
           position: 'relative',
+          display: 'flex',
+          flexDirection: 'column',
         }}>
           {displayMessages.length === 0 && !querying && !error && (
             <div style={{
