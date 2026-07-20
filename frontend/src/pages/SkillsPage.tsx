@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Button, Input, Card, Space, Spin, Typography,
-  Modal, List, Checkbox, message, Popconfirm, Empty, Tag, Divider,
+  Modal, List, Checkbox, message, Popconfirm, Empty, Tag,
 } from 'antd';
 import {
   PlusOutlined, DeleteOutlined, ThunderboltOutlined,
