@@ -28,6 +28,7 @@ class ConversationResponse(BaseModel):
     title: str
     connection_name: str
     llm_config_id: int
+    connection_schemas: list[dict] = []  # [{connection_name, schemas}] JSON from column
     message_count: int = 0
     skill_ids: list[int] = []  # Deduplicated skill IDs used in this conversation
     created_at: str
@@ -39,6 +40,7 @@ class ConversationDetailResponse(BaseModel):
     title: str
     connection_name: str
     llm_config_id: int
+    connection_schemas: list[dict] = []  # [{connection_name, schemas}] JSON from column
     created_at: str
     updated_at: str
     messages: list[MessageResponse] = []

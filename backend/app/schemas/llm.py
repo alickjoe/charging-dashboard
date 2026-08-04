@@ -45,8 +45,20 @@ class TestLLMResponse(BaseModel):
     latency_ms: float = 0
 
 
-class NLQueryRequest(BaseModel):
+class ConnectionSchemaSelection(BaseModel):
+    """A selected database connection with optional schema filtering.
+
+    Empty ``schemas`` means all schemas of that connection participate.
+    """
     connection_name: str
+    schemas: list[str] = []
+
+
+class NLQueryRequest(BaseModel):
+    # Backward compatible single-connection field (kept for older clients)
+    connection_name: Optional[str] = None
+    # Multi-connection selection with per-connection schema filtering
+    connection_schemas: Optional[list[ConnectionSchemaSelection]] = None
     llm_config_id: int
     question: str = Field(..., min_length=1, max_length=2000)
     conversation_id: Optional[int] = None

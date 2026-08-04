@@ -22,6 +22,7 @@ def _row_to_response(row: dict) -> ConversationResponse:
         title=row["title"],
         connection_name=row["connection_name"],
         llm_config_id=row["llm_config_id"],
+        connection_schemas=row.get("connection_schemas", []),
         message_count=row.get("message_count", 0),
         skill_ids=row.get("skill_ids", []),
         created_at=row["created_at"],

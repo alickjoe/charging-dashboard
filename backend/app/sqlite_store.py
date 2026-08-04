@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     title           TEXT NOT NULL DEFAULT '',
     connection_name TEXT NOT NULL,
     llm_config_id   INTEGER NOT NULL,
+    connection_schemas TEXT NOT NULL DEFAULT '[]',
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -135,6 +136,13 @@ async def init_db() -> None:
             try:
                 conn.execute(
                     "ALTER TABLE conversation_messages ADD COLUMN skill_ids TEXT NOT NULL DEFAULT '[]'"
+                )
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            # Migration: add connection_schemas column to conversations if missing
+            try:
+                conn.execute(
+                    "ALTER TABLE conversations ADD COLUMN connection_schemas TEXT NOT NULL DEFAULT '[]'"
                 )
             except sqlite3.OperationalError:
                 pass  # Column already exists
@@ -473,13 +481,30 @@ class ConversationStore:
     """CRUD operations for conversations and conversation_messages."""
 
     @staticmethod
-    async def create(connection_name: str, llm_config_id: int, title: str = "") -> dict:
+    def _parse_connection_schemas(raw) -> list:
+        """Parse the connection_schemas JSON column into a list."""
+        import json as _json
+        if not raw:
+            return []
+        try:
+            val = _json.loads(raw)
+            return val if isinstance(val, list) else []
+        except (_json.JSONDecodeError, TypeError):
+            return []
+
+    @staticmethod
+    async def create(
+        connection_name: str,
+        llm_config_id: int,
+        title: str = "",
+        connection_schemas: str = '[]',
+    ) -> dict:
         def _do():
             conn = _get_conn()
             try:
                 conn.execute(
-                    "INSERT INTO conversations (title, connection_name, llm_config_id) VALUES (?, ?, ?)",
-                    (title, connection_name, llm_config_id),
+                    "INSERT INTO conversations (title, connection_name, llm_config_id, connection_schemas) VALUES (?, ?, ?, ?)",
+                    (title, connection_name, llm_config_id, connection_schemas),
                 )
                 conn.commit()
                 row = conn.execute(
@@ -504,6 +529,12 @@ class ConversationStore:
                        ORDER BY c.updated_at DESC"""
                 ).fetchall()
                 results = [dict(r) for r in rows]
+
+                # Parse connection_schemas JSON for each conversation
+                for r in results:
+                    r["connection_schemas"] = ConversationStore._parse_connection_schemas(
+                        r.get("connection_schemas")
+                    )
 
                 # Aggregate skill_ids across all messages per conversation
                 conv_ids = [r["id"] for r in results]
@@ -546,6 +577,9 @@ class ConversationStore:
                 if not row:
                     return None
                 result = dict(row)
+                result["connection_schemas"] = ConversationStore._parse_connection_schemas(
+                    result.get("connection_schemas")
+                )
                 msgs = conn.execute(
                     "SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY id ASC",
                     (conversation_id,),

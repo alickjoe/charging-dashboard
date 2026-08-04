@@ -11,11 +11,12 @@ import {
   MenuFoldOutlined, MenuUnfoldOutlined,
 } from '@ant-design/icons';
 import { fetchConnections } from '../api/connections';
+import { fetchSchemas } from '../api/databases';
 import { fetchLLMConfigs, executeNLQueryStream } from '../api/llm';
 import { fetchConversations, fetchConversationDetail, deleteConversation } from '../api/conversations';
 import { fetchSkills } from '../api/skills';
 import type {
-  ConnectionInfo, LLMConfig, SSEEvent,
+  ConnectionInfo, ConnectionSchemaSelection, LLMConfig, SSEEvent,
   Conversation, ConversationDetail, ConversationMessage,
   Skill,
 } from '../types';
@@ -326,7 +327,10 @@ export default function NLQueryPage() {
   const queryClient = useQueryClient();
 
   // ── Global selections (for new conversations) ──
-  const [selectedConn, setSelectedConn] = useState<string | undefined>();
+  const [selectedConns, setSelectedConns] = useState<string[]>([]);
+  const [schemaFilters, setSchemaFilters] = useState<Record<string, string[]>>({});
+  const [schemasMap, setSchemasMap] = useState<Record<string, string[]>>({});
+  const [schemasLoading, setSchemasLoading] = useState<Record<string, boolean>>({});
   const [selectedLLM, setSelectedLLM] = useState<number | undefined>();
 
   // ── Conversation state ──
@@ -390,6 +394,24 @@ export default function NLQueryPage() {
 
   const availableConns = connections || [];
 
+  // ── Load schema lists for selected connections (for schema filtering) ──
+  useEffect(() => {
+    selectedConns.forEach((connName) => {
+      if (schemasMap[connName] !== undefined) return;
+      setSchemasLoading((prev) => ({ ...prev, [connName]: true }));
+      fetchSchemas(connName)
+        .then((schemas) => {
+          setSchemasMap((prev) => ({ ...prev, [connName]: schemas }));
+        })
+        .catch(() => {
+          setSchemasMap((prev) => ({ ...prev, [connName]: [] }));
+        })
+        .finally(() => {
+          setSchemasLoading((prev) => ({ ...prev, [connName]: false }));
+        });
+    });
+  }, [selectedConns, schemasMap]);
+
   // ── Load messages when switching conversations ──
   useEffect(() => {
     if (!activeConvId) {
@@ -406,6 +428,7 @@ export default function NLQueryPage() {
         title: detail.title,
         connection_name: detail.connection_name,
         llm_config_id: detail.llm_config_id,
+        connection_schemas: detail.connection_schemas || [],
         message_count: detail.messages?.length || 0,
         skill_ids: detail.skill_ids || [],
         created_at: detail.created_at,
@@ -484,7 +507,19 @@ export default function NLQueryPage() {
   }, []);
 
   const handleSend = () => {
-    const conn = activeConvMeta?.connection_name || selectedConn;
+    // Effective connection selections: conversation-bound or global multi-select
+    let connSelections: ConnectionSchemaSelection[];
+    if (activeConvMeta) {
+      connSelections = activeConvMeta.connection_schemas?.length
+        ? activeConvMeta.connection_schemas
+        : [{ connection_name: activeConvMeta.connection_name, schemas: [] }];
+    } else {
+      connSelections = selectedConns.map((c) => ({
+        connection_name: c,
+        schemas: schemaFilters[c] || [],
+      }));
+    }
+    const conn = connSelections[0]?.connection_name;
     const llmId = activeConvMeta?.llm_config_id || selectedLLM;
 
     // Build effective question: user's input, or fall back to selected skills' templates
@@ -524,6 +559,7 @@ export default function NLQueryPage() {
     abortRef.current = executeNLQueryStream(
       {
         connection_name: conn,
+        connection_schemas: connSelections,
         llm_config_id: llmId,
         question: effectiveQuestion,
         conversation_id: activeConvId ?? undefined,
@@ -623,6 +659,8 @@ export default function NLQueryPage() {
     setMessages([]);
     resetStreamState();
     setQuestion('');
+    setSelectedConns([]);
+    setSchemaFilters({});
     setSelectedSkillIds([]);
     setShowSkillPicker(false);
     setSlashFilter('');
@@ -663,7 +701,7 @@ export default function NLQueryPage() {
   };
 
   // ── Determine if we can send ──
-  const conn = activeConvMeta?.connection_name || selectedConn;
+  const conn = activeConvMeta?.connection_name || selectedConns[0];
   const llmId = activeConvMeta?.llm_config_id || selectedLLM;
   const skillQuestion = selectedSkillIds.length > 0
     ? (skills || [])
@@ -675,7 +713,26 @@ export default function NLQueryPage() {
   const canSend = !!conn && !!llmId && !!effectiveQuestion && !querying;
 
   // ── Conversation info for header ──
-  const connLabel = availableConns.find((c) => c.name === conn)?.label || conn || '';
+  const labelOf = (name: string) => availableConns.find((c) => c.name === name)?.label || name;
+  // DB scope tags: "<connection name>: <schema list>" (schema list = allSchemas when unfiltered)
+  const dbScopeTags = (() => {
+    const selections: ConnectionSchemaSelection[] = activeConvMeta
+      ? (activeConvMeta.connection_schemas?.length
+          ? activeConvMeta.connection_schemas
+          : [{ connection_name: activeConvMeta.connection_name, schemas: [] }])
+      : selectedConns.map((c) => ({ connection_name: c, schemas: schemaFilters[c] || [] }));
+    return selections.map((s) => ({
+      key: s.connection_name,
+      text: `${s.connection_name}: ${s.schemas?.length ? s.schemas.join(', ') : t('chat.allSchemas')}`,
+    }));
+  })();
+  const convDbText = (conv: Conversation) => {
+    const names = conv.connection_schemas?.length
+      ? conv.connection_schemas.map((s) => s.connection_name)
+      : [conv.connection_name];
+    const shown = names.slice(0, 2).join(', ');
+    return shown + (names.length > 2 ? ` +${names.length - 2}` : '');
+  };
   const llmName = (llmConfigs || []).find((c) => c.id === llmId)?.name || '';
 
   // ── Merge historic + streaming messages for display ──
@@ -792,7 +849,7 @@ export default function NLQueryPage() {
                       {conv.title || t('chat.newConversation')}
                     </div>
                     <div style={{ fontSize: 12, color: '#999', marginTop: 2 }}>
-                      {t('chat.messages', { count: conv.message_count })} · {fmtTime(conv.updated_at)}
+                      {convDbText(conv)} · {t('chat.messages', { count: conv.message_count })} · {fmtTime(conv.updated_at)}
                     </div>
                     {conv.skill_ids && conv.skill_ids.length > 0 && (
                       <div style={{ marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 3 }}>
@@ -850,7 +907,10 @@ export default function NLQueryPage() {
           {activeConvMeta ? (
             <>
               <Text strong style={{ fontSize: 15 }}>{activeConvMeta.title || t('chat.newConversation')}</Text>
-              <Tag>{connLabel}</Tag>
+              {dbScopeTags.slice(0, 3).map((tag) => (
+                <Tag key={tag.key} color="cyan">{tag.text}</Tag>
+              ))}
+              {dbScopeTags.length > 3 && <Tag>+{dbScopeTags.length - 3}</Tag>}
               <Tag color="blue">{llmName}</Tag>
             </>
           ) : (
@@ -859,11 +919,21 @@ export default function NLQueryPage() {
               <Space wrap style={{ flexWrap: 'wrap' }}>
                 <span style={{ fontSize: 13, color: '#666' }}>{t('chat.dbLabel')}</span>
                 <Select
-                  placeholder={t('chat.selectDB')}
-                  value={selectedConn}
-                  onChange={(v) => setSelectedConn(v)}
+                  mode="multiple"
+                  placeholder={t('chat.selectDBs')}
+                  value={selectedConns}
+                  onChange={(v: string[]) => {
+                    setSelectedConns(v);
+                    // Drop schema filters for deselected connections
+                    setSchemaFilters((prev) => {
+                      const next: Record<string, string[]> = {};
+                      v.forEach((c) => { if (prev[c]) next[c] = prev[c]; });
+                      return next;
+                    });
+                  }}
                   loading={loadingConns}
-                  style={{ minWidth: 220 }}
+                  style={{ minWidth: 240, maxWidth: 360 }}
+                  maxTagCount={2}
                   options={availableConns.map((c: ConnectionInfo) => ({
                     value: c.name,
                     label: `${c.label} (${c.database})`,
@@ -883,6 +953,36 @@ export default function NLQueryPage() {
                   }))}
                   notFoundContent={loadingLLMs ? <Spin size="small" /> : t('chat.noLLMConfigs')}
                 />
+                {selectedConns.length > 0 && (
+                  <>
+                    <span style={{ fontSize: 13, color: '#666' }}>{t('chat.schemaLabel')}</span>
+                    {selectedConns.map((c) => {
+                      const schemas = schemasMap[c] || [];
+                      const loading = !!schemasLoading[c];
+                      if (schemas.length === 0 && !loading) {
+                        return (
+                          <Text key={c} type="secondary" style={{ fontSize: 12 }}>
+                            {t('chat.schemasLoadFailed', { db: labelOf(c) })}
+                          </Text>
+                        );
+                      }
+                      return (
+                        <Select
+                          key={c}
+                          mode="multiple"
+                          placeholder={`${labelOf(c)} · ${t('chat.allSchemas')}`}
+                          value={schemaFilters[c] || []}
+                          onChange={(v: string[]) => setSchemaFilters((prev) => ({ ...prev, [c]: v }))}
+                          loading={loading}
+                          style={{ minWidth: 180, maxWidth: 300 }}
+                          maxTagCount={1}
+                          options={schemas.map((s) => ({ value: s, label: s }))}
+                          notFoundContent={loading ? <Spin size="small" /> : t('chat.noSchemas')}
+                        />
+                      );
+                    })}
+                  </>
+                )}
               </Space>
             </>
           )}
@@ -994,6 +1094,12 @@ export default function NLQueryPage() {
                 }}>
                   {msg.question}
                 </div>
+                {/* DB scope tags: which databases & schemas this conversation queries */}
+                <div style={{ marginTop: 3, display: 'flex', gap: 3, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  {dbScopeTags.map((tag) => (
+                    <Tag key={tag.key} color="cyan" style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>{tag.text}</Tag>
+                  ))}
+                </div>
                 {(() => {
                   try {
                     const ids: number[] = JSON.parse(msg.skill_ids || '[]');
@@ -1058,6 +1164,12 @@ export default function NLQueryPage() {
                 }}>
                   {question}
                 </div>
+              </div>
+              {/* DB scope tags for the streaming question */}
+              <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', justifyContent: 'flex-end', marginBottom: 8 }}>
+                {dbScopeTags.map((tag) => (
+                  <Tag key={tag.key} color="cyan" style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>{tag.text}</Tag>
+                ))}
               </div>
 
               {/* AI streaming bubble */}

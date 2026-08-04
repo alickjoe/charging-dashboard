@@ -40,6 +40,19 @@ def _row_to_response(row: dict) -> LLMConfigResponse:
     )
 
 
+def _resolve_connections(body: NLQueryRequest) -> list[dict]:
+    """Resolve effective connection selections from a query request.
+
+    Prefers `connection_schemas` (multi-DB with per-connection schema filters);
+    falls back to the legacy single `connection_name` (all schemas).
+    """
+    if body.connection_schemas:
+        return [c.model_dump() for c in body.connection_schemas]
+    if body.connection_name:
+        return [{"connection_name": body.connection_name, "schemas": []}]
+    raise HTTPException(status_code=400, detail="请至少选择一个数据库连接")
+
+
 # ─── LLM Config CRUD ───────────────────────────────────────────────
 
 @router.get("/api/v1/llm-configs", response_model=list[LLMConfigResponse])
@@ -143,10 +156,12 @@ async def nl_query(body: NLQueryRequest, request: Request):
         raise HTTPException(status_code=404, detail=f"LLM 配置 ID={body.llm_config_id} 不存在")
     llm_row = LLMConfigStore.decrypt_api_key(llm_row)
 
+    connections = _resolve_connections(body)
+
     try:
         result = await execute_nl_query(
             pools=pools,
-            connection_name=body.connection_name,
+            connection_name=connections[0]["connection_name"],
             llm_config=llm_row,
             question=body.question,
         )
@@ -170,6 +185,8 @@ async def nl_query_stream(body: NLQueryRequest, request: Request):
     if not llm_row:
         raise HTTPException(status_code=404, detail=f"LLM 配置 ID={body.llm_config_id} 不存在")
     llm_row = LLMConfigStore.decrypt_api_key(llm_row)
+
+    connections = _resolve_connections(body)
 
     # Load skill prompts if skill_ids provided
     skill_prompts: list[str] | None = None
@@ -201,9 +218,10 @@ async def nl_query_stream(body: NLQueryRequest, request: Request):
     else:
         # Pre-create conversation so we can return its ID in the done event
         conv = await ConversationStore.create(
-            connection_name=body.connection_name,
+            connection_name=connections[0]["connection_name"],
             llm_config_id=body.llm_config_id,
             title="",
+            connection_schemas=json.dumps(connections, ensure_ascii=False),
         )
         conversation_id = conv["id"]
 
@@ -215,7 +233,7 @@ async def nl_query_stream(body: NLQueryRequest, request: Request):
 
         async for sse_str in run_agent_stream(
             pools=pools,
-            connection_name=body.connection_name,
+            connections=connections,
             llm_config=llm_row,
             question=body.question,
             history_messages=history_messages if history_messages else None,
