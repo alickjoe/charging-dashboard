@@ -1,5 +1,8 @@
 fastapi==0.115.*
 uvicorn[standard]==0.34.*
 asyncpg==0.30.*
-pydantic==2.10.*
+pydantic>=2.11,<3
+pydantic-settings==2.7.*
+python-dateutil==2.9.*
+tenacity==9.0.*
 httpx>=0.28.0

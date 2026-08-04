@@ -42,7 +42,12 @@ export function executeNLQueryStream(
 ): AbortController {
   const controller = new AbortController();
 
-  fetch('/api/v1/nl-query-stream', {
+  const isElectron = typeof window !== 'undefined' && window.__ELECTRON__ === true;
+  const url = isElectron
+    ? 'http://localhost:8000/api/v1/nl-query-stream'
+    : '/api/v1/nl-query-stream';
+
+  fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),

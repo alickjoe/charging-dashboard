@@ -1,0 +1,63 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm ci
+          $env:VITE_ELECTRON_BUILD = 'true'
+          npm run build
+          cd ..
+
+      - name: Install build dependencies
+        run: pip install -r scripts/requirements-installer.txt
+
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Build backend (aiquery-backend.exe)
+        run: python -m PyInstaller scripts/backend.spec --distpath dist --workpath dist/build/backend --noconfirm --clean
+
+      - name: Build Electron installer
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          New-Item -ItemType Directory -Force -Path electron/dist
+          Copy-Item -Recurse -Force frontend/dist/* electron/dist/
+          cd electron
+          npm install --no-audit --no-fund
+          npx electron-builder --win
+          cd ..
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AI-DB-Query-Installer
+          path: dist/AI DB Query Setup *.exe
+          if-no-files-found: error

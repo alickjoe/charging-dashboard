@@ -79,7 +79,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='backend',
+    name='aiquery-backend',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

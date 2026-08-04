@@ -1,0 +1,49 @@
+{
+  "name": "aidbquery-electron",
+  "version": "0.1.0",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^34.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.aidbquery.app",
+    "productName": "AI DB Query",
+    "directories": {
+      "output": "../dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "dist/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist/aiquery-backend.exe",
+        "to": "aiquery-backend.exe"
+      },
+      {
+        "from": "../backend/data/config.db",
+        "to": "data/config.db"
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "AI DB Query",
+      "language": "2052",
+      "unicode": true
+    }
+  }
+}

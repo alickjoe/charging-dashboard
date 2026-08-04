@@ -1,5 +1,4 @@
 $files = @(
-    "scripts\write_installer.ps1",
     "scripts\write_build.ps1"
 )
 foreach ($f in $files) {

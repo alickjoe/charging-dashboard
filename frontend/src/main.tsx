@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import ReactDOM from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { BrowserRouter } from 'react-router-dom';
+import { BrowserRouter, HashRouter } from 'react-router-dom';
 import { ConfigProvider, App as AntdApp } from 'antd';
 import enUS from 'antd/locale/en_US';
 import zhCN from 'antd/locale/zh_CN';
@@ -13,6 +13,16 @@ import { ToastProvider } from './components/Toast';
 // Prevent body-level scrolling
 document.body.style.margin = '0';
 document.body.style.overflow = 'hidden';
+
+const isElectron = typeof window !== 'undefined' && window.__ELECTRON__ === true;
+
+function RouterWrapper({ children }: { children: React.ReactNode }) {
+  return isElectron ? (
+    <HashRouter>{children}</HashRouter>
+  ) : (
+    <BrowserRouter>{children}</BrowserRouter>
+  );
+}
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -32,11 +42,11 @@ function LocaleWrapper({ children }: { children: React.ReactNode }) {
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <ToastProvider>
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
+      <RouterWrapper>
         <LocaleWrapper>
           <App />
         </LocaleWrapper>
-      </BrowserRouter>
+      </RouterWrapper>
     </QueryClientProvider>
   </ToastProvider>
 );
