@@ -7,6 +7,11 @@ export interface ConnectionInfo {
   database: string;
   status: 'connected' | 'disconnected' | 'error';
   last_checked: string | null;
+  ssl_mode: string;
+  pool_min: number;
+  pool_max: number;
+  pool_idle: number;
+  query_timeout: number;
 }
 
 export interface DbConnectionConfig {

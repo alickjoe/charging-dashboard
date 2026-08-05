@@ -33,6 +33,11 @@ async def get_connection_list(pools: Dict[str, asyncpg.Pool]) -> list[dict]:
             "database": row["database"],
             "status": "unknown",
             "last_checked": None,
+            "ssl_mode": row.get("ssl_mode", "prefer"),
+            "pool_min": row.get("pool_min", 2),
+            "pool_max": row.get("pool_max", 10),
+            "pool_idle": row.get("pool_idle", 300),
+            "query_timeout": row.get("query_timeout", 30),
         }
         for row in rows
     ]

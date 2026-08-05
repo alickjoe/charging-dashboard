@@ -58,6 +58,7 @@
     "databasePlaceholder": "如 charging_qa",
     "username": "用户名",
     "usernamePlaceholder": "数据库用户名",
+    "usernameEditPlaceholder": "留空则不修改",
     "password": "密码",
     "passwordPlaceholder": "数据库密码",
     "passwordEditPlaceholder": "留空则不修改",

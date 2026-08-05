@@ -15,6 +15,11 @@ class ConnectionResponse(BaseModel):
     database: str
     status: str  # "connected" | "disconnected" | "error"
     last_checked: Optional[datetime] = None
+    ssl_mode: str = "prefer"
+    pool_min: int = 2
+    pool_max: int = 10
+    pool_idle: int = 300
+    query_timeout: int = 30
 
 
 class TestConnectionResponse(BaseModel):
@@ -25,13 +30,13 @@ class TestConnectionResponse(BaseModel):
 
 
 class CreateConnectionRequest(BaseModel):
-    name: str
-    label: str
-    host: str
+    name: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    host: str = Field(min_length=1)
     port: int = 5432
-    database: str
-    username: str
-    password: str
+    database: str = Field(min_length=1)
+    username: str = Field(min_length=1)
+    password: str = Field(min_length=1)
     ssl_mode: str = "prefer"
     pool_min: int = Field(default=2, ge=1, le=50)
     pool_max: int = Field(default=10, ge=1, le=100)

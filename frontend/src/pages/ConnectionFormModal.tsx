@@ -1,7 +1,8 @@
 import { Modal, Form, Input, InputNumber, Select, Button } from 'antd';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { createConnection, updateConnection, testTempConnection } from '../api/connections-admin';
-import type { ConnectionInfo, CreateConnectionRequest } from '../types';
+import { testConnection } from '../api/connections';
+import type { ConnectionInfo, CreateConnectionRequest, UpdateConnectionRequest } from '../types';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { useToast } from '../components/Toast';
@@ -22,10 +23,60 @@ export default function ConnectionFormModal({ open, editingConnection, onClose }
 
   const isEdit = !!editingConnection;
 
+  // Populate the form whenever the modal opens. A plain `initialValues`
+  // snapshot is not enough: after a previous open/close cycle the form
+  // store keeps stale values, so we must reset them explicitly. Credentials
+  // are never echoed — blank means "keep the stored value".
+  useEffect(() => {
+    if (!open) return;
+    form.setFieldsValue(
+      isEdit
+        ? {
+            name: editingConnection!.name,
+            label: editingConnection!.label,
+            host: editingConnection!.host,
+            port: editingConnection!.port,
+            database: editingConnection!.database,
+            ssl_mode: editingConnection!.ssl_mode,
+            pool_min: editingConnection!.pool_min,
+            pool_max: editingConnection!.pool_max,
+            pool_idle: editingConnection!.pool_idle,
+            query_timeout: editingConnection!.query_timeout,
+            username: undefined,
+            password: undefined,
+          }
+        : {
+            name: undefined,
+            label: undefined,
+            host: undefined,
+            database: undefined,
+            port: 5432,
+            ssl_mode: 'prefer',
+            pool_min: 2,
+            pool_max: 10,
+            pool_idle: 300,
+            query_timeout: 30,
+            username: undefined,
+            password: undefined,
+          }
+    );
+  }, [open, form, isEdit, editingConnection]);
+
   const handleTest = async () => {
     try {
       const values = await form.validateFields();
       setTestingTemp(true);
+      // In edit mode, when username/password is left blank, test with the
+      // stored credentials instead of the incomplete form values.
+      if (isEdit && (!values.username || !values.password)) {
+        const result = await testConnection(editingConnection!.name);
+        if (result.status === 'connected') {
+          toast.success(t('msg.testSuccess', { ms: result.latency_ms }));
+        } else {
+          toast.error(t('msg.testFail'));
+        }
+        return;
+      }
       const result = await testTempConnection({
         host: values.host,
         port: values.port,
@@ -52,7 +103,12 @@ export default function ConnectionFormModal({ open, editingConnection, onClose }
       const values = await form.validateFields();
       setSaving(true);
       if (isEdit) {
-        await updateConnection(editingConnection!.name, values);
+        // Blank username/password means "keep the stored value", so omit
+        // them from the payload instead of overwriting with empty strings.
+        const payload: UpdateConnectionRequest = { ...values };
+        if (!payload.username) delete payload.username;
+        if (!payload.password) delete payload.password;
+        await updateConnection(editingConnection!.name, payload);
         toast.success(t('msg.updated'));
       } else {
         await createConnection(values);
@@ -73,8 +129,7 @@ export default function ConnectionFormModal({ open, editingConnection, onClose }
     <Modal
       title={isEdit ? t('connectionForm.editTitle') : t('connectionForm.createTitle')}
       open={open}
-      onCancel={() => { form.resetFields(); onClose(); }}
-      afterClose={() => form.resetFields()}
+      onCancel={onClose}
       footer={[
         <Button key="test" onClick={handleTest} loading={testingTemp}>
           {t('common.test')}
@@ -87,6 +142,7 @@ export default function ConnectionFormModal({ open, editingConnection, onClose }
         </Button>,
       ]}
       width={560}
+      destroyOnClose
     >
       <Form
         form={form}
@@ -99,11 +155,11 @@ export default function ConnectionFormModal({ open, editingConnection, onClose }
                 host: editingConnection!.host,
                 port: editingConnection!.port,
                 database: editingConnection!.database,
-                ssl_mode: 'prefer',
-                pool_min: 2,
-                pool_max: 10,
-                pool_idle: 300,
-                query_timeout: 30,
+                ssl_mode: editingConnection!.ssl_mode,
+                pool_min: editingConnection!.pool_min,
+                pool_max: editingConnection!.pool_max,
+                pool_idle: editingConnection!.pool_idle,
+                query_timeout: editingConnection!.query_timeout,
               }
             : { port: 5432, ssl_mode: 'prefer', pool_min: 2, pool_max: 10, pool_idle: 300, query_timeout: 30 }
         }
@@ -123,11 +179,11 @@ export default function ConnectionFormModal({ open, editingConnection, onClose }
         <Form.Item name="database" label={t('connectionForm.database')} rules={[{ required: true, message: t('validation.databaseRequired') }]}>
           <Input placeholder={t('connectionForm.databasePlaceholder')} />
         </Form.Item>
-        <Form.Item name="username" label={t('connectionForm.username')} rules={[{ required: true, message: t('validation.usernameRequired') }]}>
-          <Input placeholder={t('connectionForm.usernamePlaceholder')} />
+        <Form.Item name="username" label={t('connectionForm.username')} rules={isEdit ? [] : [{ required: true, message: t('validation.usernameRequired') }]}>
+          <Input placeholder={isEdit ? t('connectionForm.usernameEditPlaceholder') : t('connectionForm.usernamePlaceholder')} />
         </Form.Item>
-        <Form.Item name="password" label={t('connectionForm.password')} rules={[{ required: true, message: t('validation.passwordRequired') }]}>
-          <Input.Password placeholder={t('connectionForm.passwordPlaceholder')} />
+        <Form.Item name="password" label={t('connectionForm.password')} rules={isEdit ? [] : [{ required: true, message: t('validation.passwordRequired') }]}>
+          <Input.Password placeholder={isEdit ? t('connectionForm.passwordEditPlaceholder') : t('connectionForm.passwordPlaceholder')} />
         </Form.Item>
         <Form.Item name="ssl_mode" label={t('connectionForm.sslMode')}>
           <Select

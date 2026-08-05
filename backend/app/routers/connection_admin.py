@@ -23,6 +23,11 @@ def _row_to_brief(row: dict) -> dict:
         "database": row["database"],
         "status": "disconnected",
         "last_checked": None,
+        "ssl_mode": row.get("ssl_mode", "prefer"),
+        "pool_min": row.get("pool_min", 2),
+        "pool_max": row.get("pool_max", 10),
+        "pool_idle": row.get("pool_idle", 300),
+        "query_timeout": row.get("query_timeout", 30),
     }
 
 
@@ -55,7 +60,9 @@ async def update_connection(name: str, body: UpdateConnectionRequest, request: R
     if not existing:
         raise HTTPException(status_code=404, detail=f"连接 '{name}' 不存在")
 
-    data = {k: v for k, v in body.model_dump().items() if v is not None}
+    # Empty strings are treated as "not provided" so that blank
+    # username/password fields on the edit form keep the stored values.
+    data = {k: v for k, v in body.model_dump().items() if v is not None and v != ""}
     if not data:
         raise HTTPException(status_code=400, detail="未提供任何更新字段")
 

@@ -58,6 +58,7 @@
     "databasePlaceholder": "e.g. charging_qa",
     "username": "Username",
     "usernamePlaceholder": "Database username",
+    "usernameEditPlaceholder": "Leave empty to keep unchanged",
     "password": "Password",
     "passwordPlaceholder": "Database password",
     "passwordEditPlaceholder": "Leave empty to keep unchanged",
