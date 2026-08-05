@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import create_pools_from_rows, close_pools
-from app.sqlite_store import init_db, ConnectionStore
+from app.sqlite_store import init_db, ConnectionStore, LLMConfigStore
 from app.routers import connections, connection_admin, databases, charts, llm, conversations, custom_query, skills
 
 
@@ -56,3 +56,11 @@ app.include_router(skills.router)
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
+
+
+@app.get("/api/v1/setup/status")
+async def setup_status():
+    """Report whether first-run credential setup is still required."""
+    connections = await ConnectionStore.list_all()
+    llm_configs = await LLMConfigStore.list_all()
+    return {"needs_setup": len(connections) == 0 and len(llm_configs) == 0}

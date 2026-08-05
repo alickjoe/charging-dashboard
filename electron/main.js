@@ -25,7 +25,9 @@ function getBackendExePath() {
 }
 
 function getDataDir() {
-  return getResourcePath('data');
+  // Runtime data (config.db, logs) lives in the OS user-data directory so
+  // credentials are never written into - or shipped with - the install tree.
+  return path.join(app.getPath('userData'), 'data');
 }
 
 function getLogsDir() {

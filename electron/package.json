@@ -26,10 +26,6 @@
       {
         "from": "../dist/aiquery-backend.exe",
         "to": "aiquery-backend.exe"
-      },
-      {
-        "from": "../backend/data/config.db",
-        "to": "data/config.db"
       }
     ],
     "win": {

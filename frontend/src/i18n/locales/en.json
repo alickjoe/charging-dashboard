@@ -10,6 +10,13 @@
     "brand": "AI DB Query",
     "brandShort": "AI"
   },
+  "setup": {
+    "title": "Welcome to AI DB Query",
+    "subtitle": "First-time setup: enter your credentials to configure a database connection and an LLM service. Credentials are encrypted and stored locally, and never shipped with the app.",
+    "configureConnection": "Configure Database",
+    "configureLLM": "Configure LLM",
+    "later": "Later"
+  },
   "common": {
     "test": "Test",
     "cancel": "Cancel",

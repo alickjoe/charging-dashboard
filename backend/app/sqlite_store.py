@@ -5,8 +5,11 @@ import os
 import sqlite3
 import asyncio
 import logging
+import threading
 from pathlib import Path
 from typing import Optional
+
+from cryptography.fernet import Fernet, InvalidToken
 
 logger = logging.getLogger(__name__)
 
@@ -109,12 +112,107 @@ CREATE TABLE IF NOT EXISTS skills (
 """
 
 
-def _encode(s: str) -> str:
-    return base64.b64encode(s.encode()).decode()
+# ─── Secret encryption ────────────────────────────────────────────────
+# Sensitive fields (db_connections.password, llm_configs.api_key) are
+# encrypted with Fernet (AES-128-CBC + HMAC-SHA256) instead of the previous
+# reversible base64 encoding. The key lives in the user profile directory
+# and is never shipped with the installer or the config database.
+
+_KEY_FILE_ENV = "AIDBQUERY_KEY_FILE"
+
+_fernet_lock = threading.Lock()
+_fernet: Optional[Fernet] = None
 
 
-def _decode(s: str) -> str:
+def _key_path() -> Path:
+    override = os.environ.get(_KEY_FILE_ENV)
+    if override:
+        return Path(override)
+    if os.name == "nt":
+        base = Path(os.environ.get("APPDATA") or Path.home())
+    else:
+        base = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
+    return base / "aidbquery" / "secret.key"
+
+
+def _load_or_create_key() -> bytes:
+    key_file = _key_path()
+    if key_file.exists():
+        return key_file.read_bytes()
+    key_file.parent.mkdir(parents=True, exist_ok=True)
+    key = Fernet.generate_key()
+    key_file.write_bytes(key)
+    try:
+        os.chmod(key_file, 0o600)
+    except OSError:
+        pass  # Windows may not support chmod; APPDATA is user-private
+    return key
+
+
+def _get_fernet() -> Fernet:
+    global _fernet
+    if _fernet is None:
+        with _fernet_lock:
+            if _fernet is None:
+                _fernet = Fernet(_load_or_create_key())
+    return _fernet
+
+
+def _encrypt(s: str) -> str:
+    return _get_fernet().encrypt(s.encode("utf-8")).decode("utf-8")
+
+
+def _decode_legacy(s: str) -> str:
+    """Decode a secret stored with the legacy base64 encoding."""
     return base64.b64decode(s.encode()).decode()
+
+
+def _is_legacy_base64(s: str) -> bool:
+    """True when a stored value is legacy base64, not a Fernet token."""
+    try:
+        _get_fernet().decrypt(s.encode("utf-8"))
+        return False
+    except InvalidToken:
+        pass
+    try:
+        base64.b64decode(s.encode(), validate=True)
+        return True
+    except Exception:
+        return False
+
+
+def _decrypt(s: str) -> str:
+    """Decrypt a stored secret.
+
+    Tries the current Fernet key first; falls back to the legacy base64
+    encoding so databases created before encryption stay readable.
+    """
+    try:
+        return _get_fernet().decrypt(s.encode("utf-8")).decode("utf-8")
+    except InvalidToken:
+        pass
+    try:
+        return _decode_legacy(s)
+    except Exception:
+        return s
+
+
+def _migrate_legacy_secrets() -> None:
+    """Rewrite secrets stored with the legacy base64 encoding as encrypted values."""
+    conn = _get_conn()
+    try:
+        for table, column in (("db_connections", "password"), ("llm_configs", "api_key")):
+            rows = conn.execute(f"SELECT id, {column} FROM {table}").fetchall()
+            for r in rows:
+                value = r[column]
+                if value and _is_legacy_base64(value):
+                    conn.execute(
+                        f"UPDATE {table} SET {column} = ? WHERE id = ?",
+                        (_encrypt(_decode_legacy(value)), r["id"]),
+                    )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _get_conn() -> sqlite3.Connection:
@@ -132,6 +230,7 @@ async def init_db() -> None:
         conn = _get_conn()
         try:
             conn.executescript(DDL)
+            _migrate_legacy_secrets()
             # Migration: add skill_ids column to conversation_messages if missing
             try:
                 conn.execute(
@@ -185,7 +284,7 @@ class ConnectionStore:
     @staticmethod
     async def create(data: dict) -> dict:
         data = {**data}
-        data["password"] = _encode(data["password"])
+        data["password"] = _encrypt(data["password"])
 
         def _do():
             conn = _get_conn()
@@ -223,7 +322,7 @@ class ConnectionStore:
                     if v is not None:
                         merged[k] = v
                 if "password" in data and data["password"] is not None:
-                    merged["password"] = _encode(data["password"])
+                    merged["password"] = _encrypt(data["password"])
                 else:
                     merged["password"] = existing["password"]
 
@@ -262,12 +361,9 @@ class ConnectionStore:
 
     @staticmethod
     def decrypt_password(row: dict) -> dict:
-        """Decode the password field in a connection row."""
+        """Decrypt the password field in a connection row."""
         if row and "password" in row:
-            try:
-                row["password"] = _decode(row["password"])
-            except Exception:
-                pass
+            row["password"] = _decrypt(row["password"])
         return row
 
 
@@ -316,7 +412,7 @@ class LLMConfigStore:
     @staticmethod
     async def create(data: dict) -> dict:
         data = {**data}
-        data["api_key"] = _encode(data["api_key"])
+        data["api_key"] = _encrypt(data["api_key"])
 
         def _do():
             conn = _get_conn()
@@ -354,7 +450,7 @@ class LLMConfigStore:
                     if v is not None:
                         merged[k] = v
                 if "api_key" in data and data["api_key"] is not None:
-                    merged["api_key"] = _encode(data["api_key"])
+                    merged["api_key"] = _encrypt(data["api_key"])
                 else:
                     merged["api_key"] = existing["api_key"]
 
@@ -395,12 +491,9 @@ class LLMConfigStore:
 
     @staticmethod
     def decrypt_api_key(row: dict) -> dict:
-        """Decode the api_key field."""
+        """Decrypt the api_key field."""
         if row and "api_key" in row:
-            try:
-                row["api_key"] = _decode(row["api_key"])
-            except Exception:
-                pass
+            row["api_key"] = _decrypt(row["api_key"])
         return row
 
     @staticmethod

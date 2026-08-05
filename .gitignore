@@ -18,6 +18,11 @@ frontend/dist/
 .vscode/
 *.swp
 *.swo
+.qoder/
+
+# Build artifacts
+*.tsbuildinfo
+*.exe
 
 # Docker
 pgdata-dev/

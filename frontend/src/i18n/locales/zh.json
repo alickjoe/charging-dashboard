@@ -10,6 +10,13 @@
     "brand": "AI数据库查询",
     "brandShort": "AI"
   },
+  "setup": {
+    "title": "欢迎使用 AI DB Query",
+    "subtitle": "首次启动需要先录入凭据：配置数据库连接与 LLM 服务后即可开始使用。凭据会加密保存在本机，不会随应用分发。",
+    "configureConnection": "配置数据库连接",
+    "configureLLM": "配置 LLM 服务",
+    "later": "稍后配置"
+  },
   "common": {
     "test": "测试",
     "cancel": "取消",

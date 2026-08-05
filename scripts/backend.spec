@@ -62,6 +62,9 @@ a = Analysis(
         'app.services.llm_agent_service',
         'app.services.llm_service',
         'app.services.sql_validator',
+        # Secret encryption (cryptography ships binary wheels)
+        'cryptography',
+        'cryptography.fernet',
     ] + asyncpg_hidden,
     hookspath=[],
     hooksconfig={},

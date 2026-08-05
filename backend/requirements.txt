@@ -6,3 +6,4 @@ pydantic-settings==2.7.*
 python-dateutil==2.9.*
 tenacity==9.0.*
 httpx>=0.28.0
+cryptography>=42.0
