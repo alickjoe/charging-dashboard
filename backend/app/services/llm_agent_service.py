@@ -10,7 +10,7 @@ import httpx
 from app.database import get_pool
 from app.services.db_explorer_service import list_schemas, list_tables, list_columns
 from app.services.sql_validator import validate_readonly_sql
-from app.sqlite_store import AnnotationStore
+from app.sqlite_store import AnnotationStore, ConnectionStore
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +26,10 @@ You are a data analyst with read-only access to a PostgreSQL database. Your job 
 
 ## Available Tool
 
-You have one tool: `query_database`. Use it to run SELECT queries against the database. Call it whenever you need to look at actual data to answer the user's question.
+You have one tool: `query_database`. Use it to run SELECT queries against one of the available databases. Call it whenever you need to look at actual data to answer the user's question.
 
 ### query_database
+- Parameter `database`: the name of the database to query, exactly as shown in a `## Database: <name>` section header below. Omit this parameter only when exactly one database is available.
 - Parameter `sql`: a valid PostgreSQL SELECT statement
 - Returns: JSON with columns (list of column names) and rows (list of row arrays)
 - Limit results to at most 200 rows unless the user asks for more
@@ -38,12 +39,13 @@ You have one tool: `query_database`. Use it to run SELECT queries against the da
 
 1. ONLY use SELECT / WITH ... SELECT queries. NEVER any write operations.
 2. Explore the schema first with simple queries before diving into complex analysis.
-3. Explain your reasoning step by step before each query.
-4. After seeing query results, analyze them and explain your findings in plain language.
-5. If a query fails, try to fix it based on the error message.
-6. Use markdown formatting for readability.
-7. Max 5 query rounds.
-8. REMINDER: All output must be in {language}. This is non-negotiable.
+3. The data you need may be spread across multiple databases: query each database as needed (pass its `database` parameter) and combine the results in your analysis.
+4. Explain your reasoning step by step before each query.
+5. After seeing query results, analyze them and explain your findings in plain language.
+6. If a query fails, try to fix it based on the error message.
+7. Use markdown formatting for readability.
+8. Max 5 query rounds.
+9. REMINDER: All output must be in {language}. This is non-negotiable.
 
 ## Database Schema
 
@@ -53,14 +55,18 @@ TOOL_DEFINITION = {
     "type": "function",
     "function": {
         "name": "query_database",
-        "description": "Execute a read-only SELECT query against the database and return results as JSON.",
+        "description": "Execute a read-only SELECT query against one of the available databases and return results as JSON.",
         "parameters": {
             "type": "object",
             "properties": {
+                "database": {
+                    "type": "string",
+                    "description": "The database name to query, exactly as shown in a '## Database: <name>' section header of the schema. Omit only when exactly one database is available.",
+                },
                 "sql": {
                     "type": "string",
                     "description": "A valid PostgreSQL SELECT statement to execute.",
-                }
+                },
             },
             "required": ["sql"],
         },
@@ -70,60 +76,84 @@ TOOL_DEFINITION = {
 MAX_ROUNDS = 100
 
 
-async def _get_schema_text(pools: dict, connection_name: str, language: str = "en") -> str:
-    """Build a text description of the database schema, including business annotations."""
+async def _get_schema_text(pools: dict, connections: list[dict], language: str = "en") -> str:
+    """Build a text description of the schemas for one or more connections.
+
+    Each ``connections`` item is a dict: ``{"connection_name": str, "schemas": [..]}``
+    where an empty ``schemas`` list means all schemas of that connection.
+    """
     # Language-aware labels
     anno_label = "业务说明" if language == "zh" else "Business Description"
-    try:
-        schemas = await list_schemas(pools, connection_name)
-    except Exception:
-        schemas = ["public"]
+    sections = []
 
-    # Fetch business annotations for this connection
-    annotation_rows = await AnnotationStore.list_by_connection(connection_name)
-    table_annotations: dict[str, str] = {}
-    column_annotations: dict[str, dict[str, str]] = {}
-    for a in annotation_rows:
-        tn = a["table_name"]
-        if a["column_name"] is None:
-            table_annotations[tn] = a["annotation"]
-        else:
-            column_annotations.setdefault(tn, {})[a["column_name"]] = a["annotation"]
+    for conn_sel in connections:
+        conn_name = conn_sel["connection_name"]
+        selected_schemas = conn_sel.get("schemas") or []
 
-    lines = []
-    for schema in schemas[:5]:
+        # Resolve display label from connection config (fallback to name)
         try:
-            tables = await list_tables(pools, connection_name, schema)
+            conn_row = await ConnectionStore.get_by_name(conn_name)
+            label = conn_row["label"] if conn_row else conn_name
         except Exception:
-            continue
+            label = conn_name
 
-        for table in tables[:20]:
-            table_name = table["table_name"]
+        try:
+            schemas = await list_schemas(pools, conn_name)
+        except Exception:
+            schemas = ["public"]
+        if selected_schemas:
+            schemas = [s for s in schemas if s in selected_schemas]
+
+        # Fetch business annotations for this connection
+        try:
+            annotation_rows = await AnnotationStore.list_by_connection(conn_name)
+        except Exception:
+            annotation_rows = []
+        table_annotations: dict[str, str] = {}
+        column_annotations: dict[str, dict[str, str]] = {}
+        for a in annotation_rows:
+            tn = a["table_name"]
+            if a["column_name"] is None:
+                table_annotations[tn] = a["annotation"]
+            else:
+                column_annotations.setdefault(tn, {})[a["column_name"]] = a["annotation"]
+
+        lines = [f"## Database: {conn_name}", f"- label: {label}"]
+        for schema in schemas[:5]:
             try:
-                cols = await list_columns(pools, connection_name, table_name, schema)
+                tables = await list_tables(pools, conn_name, schema)
             except Exception:
                 continue
 
-            col_lines = []
-            for c in cols[:50]:
-                nullable = "NULL" if c["is_nullable"] == "YES" else "NOT NULL"
-                pk = " PRIMARY KEY" if c["is_primary_key"] else ""
-                col_line = f'    "{c["column_name"]}" {c["data_type"]} {nullable}{pk}'
-                col_anno = column_annotations.get(table_name, {}).get(c["column_name"], "")
-                if col_anno:
-                    col_line += f"  -- {col_anno}"
-                col_lines.append(col_line)
+            for table in tables[:20]:
+                table_name = table["table_name"]
+                try:
+                    cols = await list_columns(pools, conn_name, table_name, schema)
+                except Exception:
+                    continue
 
-            row_est = table.get("row_count_estimate", "?")
-            table_header = f'Table "{schema}"."{table_name}" (~{row_est} rows):'
-            table_anno = table_annotations.get(table_name, "")
-            if table_anno:
-                table_header += f" -- {anno_label}: {table_anno}"
-            lines.append(table_header + "\n" + "\n".join(col_lines))
+                col_lines = []
+                for c in cols[:50]:
+                    nullable = "NULL" if c["is_nullable"] == "YES" else "NOT NULL"
+                    pk = " PRIMARY KEY" if c["is_primary_key"] else ""
+                    col_line = f'    "{c["column_name"]}" {c["data_type"]} {nullable}{pk}'
+                    col_anno = column_annotations.get(table_name, {}).get(c["column_name"], "")
+                    if col_anno:
+                        col_line += f"  -- {col_anno}"
+                    col_lines.append(col_line)
 
-    if not lines:
+                row_est = table.get("row_count_estimate", "?")
+                table_header = f'Table "{schema}"."{table_name}" (~{row_est} rows):'
+                table_anno = table_annotations.get(table_name, "")
+                if table_anno:
+                    table_header += f" -- {anno_label}: {table_anno}"
+                lines.append(table_header + "\n" + "\n".join(col_lines))
+
+        sections.append("\n".join(lines))
+
+    if not sections:
         return "No tables found in any schema."
-    return "\n\n".join(lines)
+    return "\n\n".join(sections)
 
 
 async def _execute_sql(
@@ -148,7 +178,7 @@ def _sse_event(event_type: str, data: dict) -> str:
 
 async def run_agent_stream(
     pools: dict,
-    connection_name: str,
+    connections: list[dict],
     llm_config: dict,
     question: str,
     history_messages: list | None = None,
@@ -158,16 +188,45 @@ async def run_agent_stream(
     """
     Agent loop with SSE streaming output.
 
+    ``connections`` is a list of dicts: ``{"connection_name": str, "schemas": [..]}``
+    (empty ``schemas`` = all schemas of that connection).
+
     Yields SSE-formatted strings to be consumed by StreamingResponse.
     """
     # Map language code to display name for the system prompt
     lang_name = "Chinese" if language == "zh" else "English"
-    
-    schema_text = await _get_schema_text(pools, connection_name, language)
-    if not schema_text or schema_text.startswith("No tables"):
-        yield _sse_event("error", {"message": "目标数据库中没有找到任何表"})
+
+    # Filter out connections whose pool is unavailable (failed to initialize)
+    available: list[dict] = []
+    unavailable_names: list[str] = []
+    for c in connections:
+        if pools.get(c["connection_name"]) is not None:
+            available.append(c)
+        else:
+            unavailable_names.append(c["connection_name"])
+
+    if not available:
+        yield _sse_event("error", {"message": f"所选数据库均不可用: {', '.join(unavailable_names)}"})
         yield _sse_event("done", {"message": ""})
         return
+    if unavailable_names:
+        logger.warning("Unavailable databases skipped: %s", unavailable_names)
+
+    available_names = [c["connection_name"] for c in available]
+
+    schema_text = await _get_schema_text(pools, available, language)
+    if not schema_text or schema_text.startswith("No tables"):
+        yield _sse_event("error", {"message": "所选数据库中没有找到任何表"})
+        yield _sse_event("done", {"message": ""})
+        return
+
+    # Tell the LLM which databases must NOT be queried
+    if unavailable_names:
+        schema_text += (
+            "\n\n## Unavailable Databases\n"
+            + "\n".join(f"- {n}" for n in unavailable_names)
+            + "\n(These databases are NOT queryable. Never use them.)"
+        )
 
     system_prompt = AGENT_SYSTEM_PROMPT.format(schema_text=schema_text, language=lang_name)
 
@@ -313,6 +372,22 @@ async def run_agent_stream(
                 sql = args.get("sql", "")
                 yield _sse_event("sql", {"content": sql})
 
+                # Resolve target database (omit → first available, backward compatible)
+                db_name = args.get("database") or available_names[0]
+                if db_name not in available_names:
+                    tool_result = (
+                        f"Unknown database '{db_name}'. "
+                        f"Available databases: {', '.join(available_names)}. "
+                        "Pass the 'database' parameter matching a '## Database:' header."
+                    )
+                    yield _sse_event("error", {"message": tool_result})
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": tool_result,
+                    })
+                    continue
+
                 # Validate
                 is_valid, validated_or_err = validate_readonly_sql(sql)
                 if not is_valid:
@@ -320,7 +395,7 @@ async def run_agent_stream(
                     yield _sse_event("error", {"message": tool_result})
                 else:
                     try:
-                        columns, rows = await _execute_sql(pools, connection_name, validated_or_err)
+                        columns, rows = await _execute_sql(pools, db_name, validated_or_err)
                         result_preview = json.dumps({
                             "columns": columns,
                             "rows": rows[:20],  # Preview first 20 rows

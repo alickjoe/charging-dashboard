@@ -132,8 +132,14 @@ export interface LLMConfigFormData {
   is_default: boolean;
 }
 
-export interface NLQueryRequest {
+export interface ConnectionSchemaSelection {
   connection_name: string;
+  schemas: string[];  // empty = all schemas of that connection
+}
+
+export interface NLQueryRequest {
+  connection_name?: string;
+  connection_schemas?: ConnectionSchemaSelection[];
   llm_config_id: number;
   question: string;
   conversation_id?: number;
@@ -170,6 +176,7 @@ export interface Conversation {
   title: string;
   connection_name: string;
   llm_config_id: number;
+  connection_schemas: ConnectionSchemaSelection[];
   message_count: number;
   skill_ids: number[];
   created_at: string;
