@@ -51,6 +51,7 @@ async def create_pool_from_row(row: dict) -> asyncpg.Pool:
             dsn=dsn,
             min_size=row.get("pool_min", 2),
             max_size=row.get("pool_max", 10),
+            max_inactive_connection_lifetime=row.get("pool_idle", 300),
             command_timeout=row.get("query_timeout", 30),
             ssl=ssl_context,
         ),
