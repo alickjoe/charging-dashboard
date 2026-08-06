@@ -13,18 +13,19 @@ AI 数据库查询工具 — 多数据源 PostgreSQL 数据库浏览器与图表
 ### 1. 环境配置
 
 ```bash
-# 复制环境变量模板
+# 复制环境变量模板（可选，仅用于预设 LLM 默认配置）
 cp .env.example .env
-
-# 编辑 .env 填入数据库连接信息（QA/PROD）
-# 本地开发数据库无需修改，由 Docker 自动启动
 ```
+
+> 无需准备外部数据库：应用自身的配置与会话数据存放在 SQLite 文件 `backend/data/config.db` 中，后端启动时自动建表并初始化；业务数据源（PostgreSQL）通过前端"连接管理"界面添加，不在 `.env` 中配置。
 
 ### 2. 启动
 
 ```bash
 docker compose up -d
 ```
+
+仅启动两个容器服务（`frontend`、`backend`），不依赖任何外部数据库服务。
 
 ### 3. 访问
 
@@ -33,7 +34,6 @@ docker compose up -d
 | 前端 | http://localhost:5173 |
 | 后端 API | http://localhost:8000 |
 | API 文档 | http://localhost:8000/docs |
-| 本地 PostgreSQL | localhost:5432 |
 
 ## 项目结构
 
@@ -44,12 +44,11 @@ charging-dashboard/
 ├── backend/
 │   ├── Dockerfile
 │   ├── requirements.txt
-│   ├── config/databases.yaml   # 多数据库连接配置
-│   ├── scripts/init-dev-db.sql # 开发数据库种子数据
+│   ├── data/                   # SQLite 数据文件（config.db，启动时自动初始化）
 │   └── app/
 │       ├── main.py             # FastAPI 入口
-│       ├── config.py           # YAML 配置解析
-│       ├── database.py         # 连接池管理
+│       ├── database.py         # asyncpg 连接池管理
+│       ├── sqlite_store.py     # SQLite 配置/会话存储
 │       ├── routers/            # API 路由
 │       ├── schemas/            # Pydantic 模型
 │       └── services/           # 业务逻辑
@@ -67,18 +66,9 @@ charging-dashboard/
 
 ## 数据库配置
 
-编辑 `backend/config/databases.yaml` 添加数据源，支持 `${VAR:default}` 占位符从环境变量注入：
+应用自身配置（数据库连接、LLM 配置、会话、标注、技能等）存储在 SQLite 文件 `backend/data/config.db`，由后端启动时自动初始化（`sqlite_store.py`），无需手动建库或执行迁移。
 
-```yaml
-connections:
-  - name: qa_pg
-    label: "QA 环境"
-    host: ${QA_DB_HOST:localhost}
-    port: ${QA_DB_PORT:5432}
-    database: ${QA_DB_NAME:charging_qa}
-    username: ${QA_DB_USER:reader}
-    password: ${QA_DB_PASSWORD:}
-```
+业务数据源（PostgreSQL）在应用内管理：打开"连接管理"页面添加数据源（主机、端口、库名、账号、密码等），凭据加密后入库；后端启动时按需为已配置的数据源建立连接池。
 
 ## API 端点
 
