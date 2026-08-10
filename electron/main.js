@@ -39,17 +39,33 @@ function getLogsDir() {
 }
 
 // ---------------------------------------------------------------------------
-// File logging (overwrite on each startup)
+// File logging (append with size-based rotation)
 // ---------------------------------------------------------------------------
+
+const MAX_LOG_BYTES = 5 * 1024 * 1024; // rotate a log once it exceeds 5 MB
+
+function openLogStream(filePath) {
+  // Rotate before appending: keep one previous copy so failure traces from
+  // earlier runs survive restarts and oversized files.
+  try {
+    const stat = fs.statSync(filePath);
+    if (stat.size >= MAX_LOG_BYTES) {
+      fs.renameSync(filePath, `${filePath}.1`);
+    }
+  } catch (err) {
+    // First run: no log file yet — nothing to rotate.
+  }
+  return fs.createWriteStream(filePath, { flags: 'a' });
+}
 
 function initLogs() {
   const logsDir = getLogsDir();
   const backendLogPath = path.join(logsDir, 'backend.log');
   const frontendLogPath = path.join(logsDir, 'frontend.log');
 
-  // Overwrite log files on startup
-  backendLogStream = fs.createWriteStream(backendLogPath, { flags: 'w' });
-  frontendLogStream = fs.createWriteStream(frontendLogPath, { flags: 'w' });
+  // Append (never truncate) so previous runs' traces are preserved
+  backendLogStream = openLogStream(backendLogPath);
+  frontendLogStream = openLogStream(frontendLogPath);
 
   const now = new Date().toISOString();
   const header = `=== AI DB Query started at ${now} ===\n`;

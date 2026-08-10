@@ -76,12 +76,15 @@ TOOL_DEFINITION = {
 MAX_ROUNDS = 100
 
 
-async def _get_schema_text(pools: dict, connections: list[dict], language: str = "en") -> str:
+async def _get_schema_text(
+    pools: dict, connections: list[dict], language: str = "en", correlation_id: str | None = None
+) -> str:
     """Build a text description of the schemas for one or more connections.
 
     Each ``connections`` item is a dict: ``{"connection_name": str, "schemas": [..]}``
     where an empty ``schemas`` list means all schemas of that connection.
     """
+    cid = _cid(correlation_id)
     # Language-aware labels
     anno_label = "业务说明" if language == "zh" else "Business Description"
     sections = []
@@ -95,11 +98,13 @@ async def _get_schema_text(pools: dict, connections: list[dict], language: str =
             conn_row = await ConnectionStore.get_by_name(conn_name)
             label = conn_row["label"] if conn_row else conn_name
         except Exception:
+            logger.warning("[cid=%s] connection label lookup failed for %s, falling back to name", cid, conn_name)
             label = conn_name
 
         try:
             schemas = await list_schemas(pools, conn_name)
         except Exception:
+            logger.warning("[cid=%s] list_schemas failed for %s, assuming 'public'", cid, conn_name)
             schemas = ["public"]
         if selected_schemas:
             schemas = [s for s in schemas if s in selected_schemas]
@@ -108,6 +113,7 @@ async def _get_schema_text(pools: dict, connections: list[dict], language: str =
         try:
             annotation_rows = await AnnotationStore.list_by_connection(conn_name)
         except Exception:
+            logger.warning("[cid=%s] annotation lookup failed for %s", cid, conn_name)
             annotation_rows = []
         table_annotations: dict[str, str] = {}
         column_annotations: dict[str, dict[str, str]] = {}
@@ -123,6 +129,7 @@ async def _get_schema_text(pools: dict, connections: list[dict], language: str =
             try:
                 tables = await list_tables(pools, conn_name, schema)
             except Exception:
+                logger.warning("[cid=%s] list_tables failed for %s/%s", cid, conn_name, schema)
                 continue
 
             for table in tables[:20]:
@@ -130,6 +137,7 @@ async def _get_schema_text(pools: dict, connections: list[dict], language: str =
                 try:
                     cols = await list_columns(pools, conn_name, table_name, schema)
                 except Exception:
+                    logger.warning("[cid=%s] list_columns failed for %s.%s", cid, schema, table_name)
                     continue
 
                 col_lines = []
@@ -176,6 +184,11 @@ def _sse_event(event_type: str, data: dict) -> str:
     return f"data: {payload}\n\n"
 
 
+def _cid(correlation_id: str | None) -> str:
+    """Format a correlation id for log prefixes, falling back to '-' when absent."""
+    return correlation_id or "-"
+
+
 async def run_agent_stream(
     pools: dict,
     connections: list[dict],
@@ -184,17 +197,21 @@ async def run_agent_stream(
     history_messages: list | None = None,
     language: str = "en",
     skill_prompts: list[str] | None = None,
+    correlation_id: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     Agent loop with SSE streaming output.
 
     ``connections`` is a list of dicts: ``{"connection_name": str, "schemas": [..]}``
     (empty ``schemas`` = all schemas of that connection).
+    ``correlation_id`` is a request-scoped trace id included in every log line.
 
     Yields SSE-formatted strings to be consumed by StreamingResponse.
     """
     # Map language code to display name for the system prompt
     lang_name = "Chinese" if language == "zh" else "English"
+    cid = _cid(correlation_id)
+    started = time.monotonic()
 
     # Filter out connections whose pool is unavailable (failed to initialize)
     available: list[dict] = []
@@ -206,16 +223,33 @@ async def run_agent_stream(
             unavailable_names.append(c["connection_name"])
 
     if not available:
+        logger.warning(
+            "[cid=%s] stage=init no available database, duration_ms=%.1f",
+            cid, (time.monotonic() - started) * 1000,
+        )
         yield _sse_event("error", {"message": f"所选数据库均不可用: {', '.join(unavailable_names)}"})
         yield _sse_event("done", {"message": ""})
         return
     if unavailable_names:
-        logger.warning("Unavailable databases skipped: %s", unavailable_names)
+        logger.warning("[cid=%s] unavailable databases skipped: %s", cid, unavailable_names)
 
     available_names = [c["connection_name"] for c in available]
+    logger.info(
+        "[cid=%s] agent_stream start: connections=%s, question_len=%d, history_msgs=%d, skills=%d",
+        cid, available_names, len(question), len(history_messages or []), len(skill_prompts or []),
+    )
 
-    schema_text = await _get_schema_text(pools, available, language)
+    schema_start = time.monotonic()
+    schema_text = await _get_schema_text(pools, available, language, correlation_id=cid)
+    logger.info(
+        "[cid=%s] stage=schema duration_ms=%.1f chars=%d",
+        cid, (time.monotonic() - schema_start) * 1000, len(schema_text),
+    )
     if not schema_text or schema_text.startswith("No tables"):
+        logger.warning(
+            "[cid=%s] stage=init no tables found, duration_ms=%.1f",
+            cid, (time.monotonic() - started) * 1000,
+        )
         yield _sse_event("error", {"message": "所选数据库中没有找到任何表"})
         yield _sse_event("done", {"message": ""})
         return
@@ -232,7 +266,7 @@ async def run_agent_stream(
 
     # Append user-defined skill prompts (after language directive, before user message)
     if skill_prompts:
-        logger.info("Appending %d skill prompt segment(s) to system prompt", len(skill_prompts))
+        logger.info("[cid=%s] appending %d skill prompt segment(s) to system prompt", cid, len(skill_prompts))
         skill_section = "\n\n## User-Defined Skills\n\n" + "\n\n".join(skill_prompts)
         # Re-assert language requirement after skills to prevent skill content
         # from diluting the language directive (mitigates "lost in the middle")
@@ -256,6 +290,7 @@ async def run_agent_stream(
     async with httpx.AsyncClient(timeout=120, verify=False) as client:
         for _round in range(MAX_ROUNDS):
             llm_start = time.monotonic()
+            logger.info("[cid=%s] stage=llm_call round=%d", cid, _round + 1)
 
             # Call LLM with streaming + tool definition
             async with client.stream(
@@ -277,6 +312,10 @@ async def run_agent_stream(
             ) as resp:
                 if resp.status_code != 200:
                     body = await resp.aread()
+                    logger.error(
+                        "[cid=%s] stage=llm_api status=%d duration_ms=%.1f",
+                        cid, resp.status_code, (time.monotonic() - llm_start) * 1000,
+                    )
                     yield _sse_event("error", {"message": f"LLM API 错误 ({resp.status_code})"})
                     yield _sse_event("done", {"message": ""})
                     return
@@ -323,7 +362,10 @@ async def run_agent_stream(
                             if func.get("arguments"):
                                 tool_call_buf[idx]["function"]["arguments"] += func["arguments"]
                 except httpx.ReadTimeout:
-                    logger.warning("LLM stream read timed out after %.1fs", time.monotonic() - llm_start)
+                    logger.warning(
+                        "[cid=%s] stage=llm_stream interrupted reason=read_timeout round=%d duration_ms=%.1f",
+                        cid, _round + 1, (time.monotonic() - llm_start) * 1000,
+                    )
                     yield _sse_event("error", {"message": "LLM 响应超时，已返回部分结果"})
 
             llm_time = round((time.monotonic() - llm_start) * 1000, 2)
@@ -340,6 +382,10 @@ async def run_agent_stream(
                 for tc in tool_calls_list
                 if tc["function"]["name"]
             ]
+            logger.info(
+                "[cid=%s] stage=llm_done round=%d duration_ms=%.1f content_chars=%d tool_calls=%d",
+                cid, _round + 1, llm_time, len(accumulated_content), len(tool_calls_final),
+            )
 
             if tool_calls_final:
                 assistant_msg["tool_calls"] = tool_calls_final
@@ -350,6 +396,10 @@ async def run_agent_stream(
             # Execute tool calls
             if not tool_calls_final:
                 # No tool calls → LLM is done
+                logger.info(
+                    "[cid=%s] stage=done rounds=%d llm_time_ms=%.1f total_ms=%.1f",
+                    cid, _round + 1, llm_time, (time.monotonic() - started) * 1000,
+                )
                 yield _sse_event("done", {
                     "message": accumulated_content,
                     "llm_time_ms": llm_time,
@@ -366,6 +416,7 @@ async def run_agent_stream(
                 try:
                     args = json.loads(args_str)
                 except json.JSONDecodeError:
+                    logger.warning("[cid=%s] stage=tool_args parse failed round=%d", cid, _round + 1)
                     yield _sse_event("error", {"message": f"工具参数解析失败: {args_str}"})
                     continue
 
@@ -380,6 +431,7 @@ async def run_agent_stream(
                         f"Available databases: {', '.join(available_names)}. "
                         "Pass the 'database' parameter matching a '## Database:' header."
                     )
+                    logger.warning("[cid=%s] stage=tool_db unknown database '%s'", cid, db_name)
                     yield _sse_event("error", {"message": tool_result})
                     messages.append({
                         "role": "tool",
@@ -392,8 +444,10 @@ async def run_agent_stream(
                 is_valid, validated_or_err = validate_readonly_sql(sql)
                 if not is_valid:
                     tool_result = f"SQL validation failed: {validated_or_err}"
+                    logger.warning("[cid=%s] stage=sql_validate rejected round=%d", cid, _round + 1)
                     yield _sse_event("error", {"message": tool_result})
                 else:
+                    sql_start = time.monotonic()
                     try:
                         columns, rows = await _execute_sql(pools, db_name, validated_or_err)
                         result_preview = json.dumps({
@@ -409,8 +463,16 @@ async def run_agent_stream(
                         # Prepend language reminder to tool result to prevent
                         # Chinese data values from causing mid-response language switch
                         tool_result = f"[REMINDER: You MUST analyze these results and write ALL conclusions in {lang_name}. The language of data values is irrelevant.]\n\n{result_preview}"
+                        logger.info(
+                            "[cid=%s] stage=sql_exec db=%s rows=%d duration_ms=%.1f",
+                            cid, db_name, len(rows), (time.monotonic() - sql_start) * 1000,
+                        )
                     except Exception as e:
                         tool_result = f"Query execution failed: {str(e)}"
+                        logger.warning(
+                            "[cid=%s] stage=sql_exec db=%s failed duration_ms=%.1f: %s",
+                            cid, db_name, (time.monotonic() - sql_start) * 1000, e,
+                        )
                         yield _sse_event("error", {"message": tool_result})
 
                 messages.append({
@@ -420,6 +482,10 @@ async def run_agent_stream(
                 })
 
         # Max rounds reached
+        logger.warning(
+            "[cid=%s] stage=max_rounds forced done, total_ms=%.1f",
+            cid, (time.monotonic() - started) * 1000,
+        )
         yield _sse_event("done", {
             "message": accumulated_content or "已执行最大轮数，分析结束。",
             "llm_time_ms": llm_time,

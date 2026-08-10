@@ -3,6 +3,7 @@
 import json
 import time
 import logging
+import uuid
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -181,6 +182,13 @@ async def nl_query_stream(body: NLQueryRequest, request: Request):
     """
     pools = request.app.state.pools
 
+    # Request correlation id: every log line of this streaming request carries it
+    correlation_id = uuid.uuid4().hex[:12]
+    logger.info(
+        "[cid=%s] nl_query_stream entry: llm_config_id=%s, question_len=%d, conversation_id=%s",
+        correlation_id, body.llm_config_id, len(body.question), body.conversation_id,
+    )
+
     llm_row = await LLMConfigStore.get_by_id(body.llm_config_id)
     if not llm_row:
         raise HTTPException(status_code=404, detail=f"LLM 配置 ID={body.llm_config_id} 不存在")
@@ -192,19 +200,19 @@ async def nl_query_stream(body: NLQueryRequest, request: Request):
     skill_prompts: list[str] | None = None
     if body.skill_ids:
         skill_rows = await SkillStore.get_by_ids(body.skill_ids)
-        logger.info("NL query with skill_ids=%s, loaded %d skill(s)", body.skill_ids, len(skill_rows))
+        logger.info("[cid=%s] NL query with skill_ids=%s, loaded %d skill(s)", correlation_id, body.skill_ids, len(skill_rows))
         prompt_parts: list[str] = []
         for s in skill_rows:
             sp = s.get("system_prompt", "").strip()
             ut = s.get("user_prompt_template", "").strip()
             if sp:
                 prompt_parts.append(sp)
-                logger.info("  Skill '%s': system_prompt loaded (%d chars)", s["name"], len(sp))
+                logger.info("[cid=%s]   Skill '%s': system_prompt loaded (%d chars)", correlation_id, s["name"], len(sp))
             if ut:
                 prompt_parts.append(ut)
-                logger.info("  Skill '%s': user_prompt_template loaded (%d chars)", s["name"], len(ut))
+                logger.info("[cid=%s]   Skill '%s': user_prompt_template loaded (%d chars)", correlation_id, s["name"], len(ut))
         if not prompt_parts:
-            logger.warning("  No prompt content found in selected skills (both system_prompt and user_prompt_template are empty)!")
+            logger.warning("[cid=%s]   No prompt content found in selected skills (both system_prompt and user_prompt_template are empty)!", correlation_id)
         skill_prompts = prompt_parts if prompt_parts else None
 
     # Load history messages if continuing a conversation
@@ -230,69 +238,90 @@ async def nl_query_stream(body: NLQueryRequest, request: Request):
         final_llm_time = None
         final_conversation_messages = None
         done_sse_str: str | None = None
+        gen_started = time.monotonic()
 
-        async for sse_str in run_agent_stream(
-            pools=pools,
-            connections=connections,
-            llm_config=llm_row,
-            question=body.question,
-            history_messages=history_messages if history_messages else None,
-            language=body.language,
-            skill_prompts=skill_prompts,
-        ):
-            if sse_str.startswith("data: "):
-                try:
-                    event = json.loads(sse_str[6:])
-                    if event.get("type") == "done":
-                        final_llm_time = event.get("llm_time_ms")
-                        final_conversation_messages = event.get("conversation_messages")
-                        # Inject conversation_id and defer yielding until after DB save
-                        event["conversation_id"] = conversation_id
-                        done_sse_str = f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                        break  # exit loop, persist messages, then yield done
-                    etype = event.get("type", "")
-                    if etype in ("think", "sql", "result", "error"):
-                        # Merge consecutive think blocks to avoid content fragmentation
-                        if etype == "think" and collected_blocks and collected_blocks[-1].get("type") == "think":
-                            collected_blocks[-1]["content"] = (
-                                collected_blocks[-1].get("content", "") +
-                                event.get("content", "")
-                            )
-                        else:
-                            collected_blocks.append(event)
-                except (json.JSONDecodeError, KeyError):
-                    pass
+        try:
+            async for sse_str in run_agent_stream(
+                pools=pools,
+                connections=connections,
+                llm_config=llm_row,
+                question=body.question,
+                history_messages=history_messages if history_messages else None,
+                language=body.language,
+                skill_prompts=skill_prompts,
+                correlation_id=correlation_id,
+            ):
+                if sse_str.startswith("data: "):
+                    try:
+                        event = json.loads(sse_str[6:])
+                        if event.get("type") == "done":
+                            final_llm_time = event.get("llm_time_ms")
+                            final_conversation_messages = event.get("conversation_messages")
+                            # Inject conversation_id and defer yielding until after DB save
+                            event["conversation_id"] = conversation_id
+                            done_sse_str = f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                            break  # exit loop, persist messages, then yield done
+                        etype = event.get("type", "")
+                        if etype in ("think", "sql", "result", "error"):
+                            # Merge consecutive think blocks to avoid content fragmentation
+                            if etype == "think" and collected_blocks and collected_blocks[-1].get("type") == "think":
+                                collected_blocks[-1]["content"] = (
+                                    collected_blocks[-1].get("content", "") +
+                                    event.get("content", "")
+                                )
+                            else:
+                                collected_blocks.append(event)
+                    except (json.JSONDecodeError, KeyError) as e:
+                        logger.debug("[cid=%s] skipping malformed SSE event: %s", correlation_id, e)
 
-            yield sse_str
+                yield sse_str
+        except Exception:
+            logger.exception(
+                "[cid=%s] stage=agent_stream unexpected failure, duration_ms=%.1f",
+                correlation_id,
+                (time.monotonic() - gen_started) * 1000,
+            )
+            yield f"data: {json.dumps({'type': 'error', 'message': '查询过程中发生内部错误，请稍后重试', 'correlation_id': correlation_id}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'message': ''}, ensure_ascii=False)}\n\n"
+            return
 
         # Update conversation title from first question (if title is still empty)
-        current_conv = await ConversationStore.get_by_id(conversation_id)
-        if current_conv and not current_conv.get("title"):
-            title = body.question[:30] if len(body.question) > 30 else body.question
-            await ConversationStore.update_title(conversation_id, title)
+        try:
+            current_conv = await ConversationStore.get_by_id(conversation_id)
+            if current_conv and not current_conv.get("title"):
+                title = body.question[:30] if len(body.question) > 30 else body.question
+                await ConversationStore.update_title(conversation_id, title)
 
-        raw_msgs_json = json.dumps(final_conversation_messages or [], ensure_ascii=False)
-        blocks_json = json.dumps(collected_blocks, ensure_ascii=False)
-        skill_ids_json = json.dumps(body.skill_ids) if body.skill_ids else '[]'
+            raw_msgs_json = json.dumps(final_conversation_messages or [], ensure_ascii=False)
+            blocks_json = json.dumps(collected_blocks, ensure_ascii=False)
+            skill_ids_json = json.dumps(body.skill_ids) if body.skill_ids else '[]'
 
-        await ConversationStore.add_message(
-            conversation_id=conversation_id,
-            role="user",
-            question=body.question,
-            answer_blocks="[]",
-            llm_time_ms=None,
-            raw_messages=raw_msgs_json,
-            skill_ids=skill_ids_json,
-        )
-        await ConversationStore.add_message(
-            conversation_id=conversation_id,
-            role="assistant",
-            question="",
-            answer_blocks=blocks_json,
-            llm_time_ms=final_llm_time,
-            raw_messages=raw_msgs_json,
-            skill_ids=skill_ids_json,
-        )
+            await ConversationStore.add_message(
+                conversation_id=conversation_id,
+                role="user",
+                question=body.question,
+                answer_blocks="[]",
+                llm_time_ms=None,
+                raw_messages=raw_msgs_json,
+                skill_ids=skill_ids_json,
+            )
+            await ConversationStore.add_message(
+                conversation_id=conversation_id,
+                role="assistant",
+                question="",
+                answer_blocks=blocks_json,
+                llm_time_ms=final_llm_time,
+                raw_messages=raw_msgs_json,
+                skill_ids=skill_ids_json,
+            )
+        except Exception:
+            logger.exception(
+                "[cid=%s] stage=persist failed, duration_ms=%.1f",
+                correlation_id,
+                (time.monotonic() - gen_started) * 1000,
+            )
+            yield f"data: {json.dumps({'type': 'error', 'message': '查询结果保存失败，请检查服务日志', 'correlation_id': correlation_id}, ensure_ascii=False)}\n\n"
+            return
 
         # Now yield the done event — frontend will see messages when it reloads
         if done_sse_str:
