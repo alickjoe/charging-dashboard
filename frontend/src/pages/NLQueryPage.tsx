@@ -15,6 +15,7 @@ import { fetchSchemas } from '../api/databases';
 import { fetchLLMConfigs, executeNLQueryStream } from '../api/llm';
 import { fetchConversations, fetchConversationDetail, deleteConversation } from '../api/conversations';
 import { fetchSkills } from '../api/skills';
+import MarkdownRenderer from '../components/Markdown';
 import type {
   ConnectionInfo, ConnectionSchemaSelection, LLMConfig, SSEEvent,
   Conversation, ConversationDetail, ConversationMessage,
@@ -30,7 +31,7 @@ const { Paragraph, Text } = Typography;
 
 type StreamPhase = 'idle' | 'connecting' | 'thinking' | 'executing' | 'done' | 'error';
 
-type StreamBlockType = 'think' | 'sql' | 'result' | 'error';
+type StreamBlockType = 'think' | 'sql' | 'result' | 'error' | 'summary';
 
 interface StreamBlock {
   key: number;
@@ -41,136 +42,7 @@ interface StreamBlock {
   totalRows?: number;
 }
 
-// ─── Markdown Renderer ────────────────────────────────────────────
-
-// ─── Markdown Helpers ────────────────────────────────────────────
-
-/** Check if a line is a markdown table separator row (e.g. |---|---| for multi-column) */
-function isTableSeparator(line: string): boolean {
-  const trimmed = line.trim();
-  // Match single or multi-column separators: |---|, |---|---|, |:---|:---:|---|
-  return /^\|[-: ]+(\|[-: ]+)*\|$/.test(trimmed) && trimmed.includes('-');
-}
-
-/** Parse a table row into cell values, stripping leading/trailing pipes */
-function parseTableRow(line: string): string[] {
-  return line
-    .trim()
-    .replace(/^\||\|$/g, '')
-    .split('|')
-    .map(cell => cell.trim());
-}
-
-/** Find the end line of a table block starting at `start`. Returns `start` if not a valid table. */
-function findTableEnd(lines: string[], start: number): number {
-  let end = start;
-  while (
-    end < lines.length &&
-    lines[end].trimStart().startsWith('|') &&
-    lines[end].trimEnd().endsWith('|')
-  ) {
-    end++;
-  }
-  if (end - start >= 2 && isTableSeparator(lines[start + 1])) {
-    return end;
-  }
-  return start;
-}
-
-// ─── Markdown Renderer with Table Support ─────────────────────────
-
-function RenderMarkdown({ text }: { text: string }) {
-  if (!text.trim()) return null;
-
-  const lines = text.split('\n');
-  const nodes: React.ReactNode[] = [];
-  let i = 0;
-
-  while (i < lines.length) {
-    // Check if current line could start a table
-    const curLine = lines[i];
-    if (curLine.trimStart().startsWith('|') && curLine.trimEnd().endsWith('|')) {
-      const tableEnd = findTableEnd(lines, i);
-      if (tableEnd > i) {
-        // Valid markdown table found
-        const headers = parseTableRow(lines[i]);
-        const dataRows = lines.slice(i + 2, tableEnd).map(parseTableRow);
-        const maxCols = Math.max(headers.length, ...dataRows.map(r => r.length));
-
-        nodes.push(
-          <div key={`tbl-${i}`} style={{ overflowX: 'auto', marginBottom: 12 }}>
-            <table style={{
-              borderCollapse: 'collapse', width: '100%',
-              fontSize: 13, fontFamily: 'monospace',
-            }}>
-              <thead>
-                <tr style={{ background: '#f0f0f0' }}>
-                  {Array.from({ length: maxCols }).map((_, ci) => (
-                    <th key={ci} style={{
-                      border: '1px solid #ddd', padding: '4px 8px',
-                      textAlign: 'left', fontWeight: 600,
-                    }}>
-                      {headers[ci] || ''}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {dataRows.map((row, ri) => (
-                  <tr key={ri}>
-                    {Array.from({ length: maxCols }).map((_, ci) => (
-                      <td key={ci} style={{
-                        border: '1px solid #eee', padding: '2px 8px',
-                        maxWidth: 300, overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                      }}>
-                        {row[ci] || ''}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        );
-
-        i = tableEnd;
-        continue;
-      }
-    }
-
-    // Not a table — collect consecutive non-table lines as a text block
-    const textStart = i;
-    i++;
-    while (i < lines.length) {
-      const l = lines[i];
-      if (l.trimStart().startsWith('|') && l.trimEnd().endsWith('|')) {
-        const peek = findTableEnd(lines, i);
-        if (peek > i) break; // Next line starts a table
-      }
-      i++;
-    }
-
-    const textBlock = lines.slice(textStart, i).join('\n');
-    if (textBlock.trim()) {
-      const parts = textBlock.split(/(\*\*.*?\*\*|`.*?`|\n)/g);
-      nodes.push(
-        <div key={`txt-${textStart}`} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-          {parts.map((part, pi) => {
-            if (part === '\n') return <br key={pi} />;
-            if (part.startsWith('**') && part.endsWith('**'))
-              return <strong key={pi}>{part.slice(2, -2)}</strong>;
-            if (part.startsWith('`') && part.endsWith('`'))
-              return <Text key={pi} code>{part.slice(1, -1)}</Text>;
-            return <span key={pi}>{part}</span>;
-          })}
-        </div>
-      );
-    }
-  }
-
-  return <div>{nodes}</div>;
-}
+// ─── Markdown rendering is delegated to <MarkdownRenderer /> ─────
 
 // ─── Mini Result Table ────────────────────────────────────────────
 
@@ -236,7 +108,17 @@ function BlockView({ block }: { block: StreamBlock }) {
     case 'think':
       return (
         <div style={{ marginBottom: 16 }}>
-          <RenderMarkdown text={block.content} />
+          <MarkdownRenderer text={block.content} />
+        </div>
+      );
+    case 'summary':
+      // Final conclusion — shown exactly once (deduplicated against think blocks)
+      return (
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ marginBottom: 4 }}>
+            <Tag color="success">{t('block.analysisDone')}</Tag>
+          </div>
+          <MarkdownRenderer text={block.content} />
         </div>
       );
     case 'sql':
@@ -343,7 +225,6 @@ export default function NLQueryPage() {
   const [querying, setQuerying] = useState(false);
   const [streamingBlocks, setStreamingBlocks] = useState<StreamBlock[]>([]);
   const [streamingThink, setStreamingThink] = useState('');
-  const [doneMessage, setDoneMessage] = useState('');
   const [llmTime, setLlmTime] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [streamPhase, setStreamPhase] = useState<StreamPhase>('idle');
@@ -437,7 +318,6 @@ export default function NLQueryPage() {
       // Clear streaming state now that DB messages are loaded
       setStreamingBlocks([]);
       setStreamingThink('');
-      setDoneMessage('');
       setLlmTime(null);
       setError(null);
       blockKeyRef.current = 0;
@@ -456,7 +336,6 @@ export default function NLQueryPage() {
   const resetStreamState = () => {
     setStreamingBlocks([]);
     setStreamingThink('');
-    setDoneMessage('');
     setLlmTime(null);
     setError(null);
     setStreamPhase('idle');
@@ -540,12 +419,21 @@ export default function NLQueryPage() {
     startFlushTimer();
     startElapsedTimer();
 
-    // Helper to flush think buffer into streamingBlocks before phase change
-    const flushBufferToBlocks = () => {
+    // Helper to flush think buffer into streamingBlocks before phase change.
+    // `trimTail` removes the final conclusion from the pending think content
+    // (the conclusion is rendered once as a dedicated 'summary' block instead).
+    const flushBufferToBlocks = (trimTail?: string) => {
       const buf = thinkBufferRef.current;
       thinkBufferRef.current = '';
       setStreamingThink((prev) => {
-        const combined = prev + buf;
+        let combined = prev + buf;
+        const tail = trimTail?.trimEnd();
+        if (tail) {
+          const trimmed = combined.trimEnd();
+          if (trimmed.endsWith(tail)) {
+            combined = trimmed.slice(0, trimmed.length - tail.length).trimEnd();
+          }
+        }
         if (combined.trim()) {
           setStreamingBlocks((b) => [
             ...b,
@@ -603,8 +491,15 @@ export default function NLQueryPage() {
             break;
           case 'done':
             setStreamPhase('done');
-            flushBufferToBlocks();
-            setDoneMessage(event.message || '');
+            // Drop the conclusion from the pending think content…
+            flushBufferToBlocks(event.message || '');
+            // …and show it exactly once as the "analysis done" summary block
+            if (event.message) {
+              setStreamingBlocks((prev) => [
+                ...prev,
+                { key: blockKeyRef.current++, type: 'summary', content: event.message || '' },
+              ]);
+            }
             if (event.llm_time_ms) setLlmTime(event.llm_time_ms);
             // Set active conversation from done event
             if (event.conversation_id && !activeConvId) {
@@ -743,7 +638,7 @@ export default function NLQueryPage() {
     if (!streamingThink) return null;
     return (
       <div style={{ marginBottom: 16 }}>
-        <RenderMarkdown text={streamingThink} />
+        <MarkdownRenderer text={streamingThink} />
       </div>
     );
   }, [streamingThink]);
@@ -1195,15 +1090,6 @@ export default function NLQueryPage() {
                       <div style={{ marginTop: 8 }}>
                         <Text type="secondary">{t('block.phaseConnecting')}</Text>
                       </div>
-                    </div>
-                  )}
-
-                  {doneMessage && !querying && (
-                    <div style={{ marginBottom: 16 }}>
-                      <div style={{ marginBottom: 4 }}>
-                        <Tag color="success">{t('block.analysisDone')}</Tag>
-                      </div>
-                      <RenderMarkdown text={doneMessage} />
                     </div>
                   )}
 

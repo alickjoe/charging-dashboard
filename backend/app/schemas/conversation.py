@@ -16,7 +16,7 @@ class MessageResponse(BaseModel):
     conversation_id: int
     role: str
     question: str
-    answer_blocks: str  # JSON string of StreamBlock[]
+    answer_blocks: str  # JSON string of StreamBlock[]: think/sql/result/error/summary
     llm_time_ms: Optional[float] = None
     raw_messages: str  # JSON string
     skill_ids: str = '[]'  # JSON string of int[], e.g. "[1,2]"

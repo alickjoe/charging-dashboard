@@ -257,6 +257,25 @@ async def nl_query_stream(body: NLQueryRequest, request: Request):
                         if event.get("type") == "done":
                             final_llm_time = event.get("llm_time_ms")
                             final_conversation_messages = event.get("conversation_messages")
+                            # The final conclusion also streamed as think events.
+                            # Trim it off the last think block and persist it once
+                            # as a dedicated "summary" block so history matches the
+                            # live view (conclusion shown exactly once).
+                            done_msg = str(event.get("message") or "").strip()
+                            if (
+                                done_msg
+                                and collected_blocks
+                                and collected_blocks[-1].get("type") == "think"
+                            ):
+                                last_content = str(collected_blocks[-1].get("content") or "").rstrip()
+                                if last_content.endswith(done_msg):
+                                    trimmed = last_content[: len(last_content) - len(done_msg)].rstrip()
+                                    if trimmed:
+                                        collected_blocks[-1]["content"] = trimmed
+                                    else:
+                                        collected_blocks.pop()
+                            if done_msg:
+                                collected_blocks.append({"type": "summary", "content": done_msg})
                             # Inject conversation_id and defer yielding until after DB save
                             event["conversation_id"] = conversation_id
                             done_sse_str = f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
