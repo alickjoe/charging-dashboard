@@ -47,10 +47,14 @@ function start() {
   const mainPath = path.join(__dirname, 'electron-main.js');
 
   console.log(`${INFO} 正在启动 ${env.WINDOW_TITLE}…`);
+  // windowsHide MUST stay false: Windows passes SW_HIDE in the child's
+  // STARTUPINFO and Chromium applies it to the first BrowserWindow, leaving
+  // the app running with an invisible window (electron#26472). electron.exe
+  // is a GUI-subsystem binary, so no console window appears either way.
   const child = spawn(rt.electronExe, [mainPath], {
     detached: true,
     stdio: 'ignore',
-    windowsHide: true,
+    windowsHide: false,
   });
   child.unref();
 
@@ -181,17 +185,7 @@ async function doctor() {
 // adq stop
 // ---------------------------------------------------------------------------
 
-function stop() {
-  if (!fs.existsSync(env.pidFile())) {
-    console.log(`${INFO} 没有正在运行的后端（未发现 pid 文件: ${env.pidFile()}）`);
-    return;
-  }
-  let pid = null;
-  try {
-    pid = fs.readFileSync(env.pidFile(), 'utf8').trim();
-  } catch (err) {
-    die(`无法读取 pid 文件: ${err.message}`);
-  }
+function killPid(pid, label) {
   try {
     if (process.platform === 'win32') {
       const { execSync } = require('child_process');
@@ -199,11 +193,41 @@ function stop() {
     } else {
       process.kill(parseInt(pid, 10), 'SIGTERM');
     }
-    console.log(`${OK} 已停止后端进程 (pid ${pid})`);
+    console.log(`${OK} 已停止${label} (pid ${pid})`);
   } catch (err) {
-    console.log(`${INFO} 进程 ${pid} 已不存在`);
+    console.log(`${INFO} ${label}进程 ${pid} 已不存在`);
   }
-  try { fs.unlinkSync(env.pidFile()); } catch (err) { // ignore
+}
+
+function stop() {
+  const hadAny = fs.existsSync(env.electronPidFile()) || fs.existsSync(env.pidFile());
+  if (!hadAny) {
+    console.log(`${INFO} 没有正在运行的应用（未发现 pid 文件）`);
+    return;
+  }
+  // Electron first: killing its tree also takes the backend child with it;
+  // the backend pass below is just belt and braces for orphaned backends.
+  if (fs.existsSync(env.electronPidFile())) {
+    let epid = null;
+    try {
+      epid = fs.readFileSync(env.electronPidFile(), 'utf8').trim();
+      killPid(epid, '应用');
+    } catch (err) {
+      console.log(`${INFO} 无法读取应用 pid 文件: ${err.message}`);
+    }
+    try { fs.unlinkSync(env.electronPidFile()); } catch (err) { // ignore
+    }
+  }
+  if (fs.existsSync(env.pidFile())) {
+    let pid = null;
+    try {
+      pid = fs.readFileSync(env.pidFile(), 'utf8').trim();
+      killPid(pid, '后端');
+    } catch (err) {
+      die(`无法读取 pid 文件: ${err.message}`);
+    }
+    try { fs.unlinkSync(env.pidFile()); } catch (err) { // ignore
+    }
   }
 }
 
@@ -218,7 +242,7 @@ ${env.WINDOW_TITLE} (aidbquery) — 用法:
   adq            启动桌面应用（后端 + 独立窗口）
   adq --check    无窗口冒烟测试：启动后端 -> /health -> 自动退出
   adq doctor     环境自检
-  adq stop       停止残留的后端进程
+  adq stop       停止应用与残留的后端进程
 
 数据目录: ${env.dataRoot()}
 日志目录: ${env.logsDir()}

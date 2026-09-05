@@ -8,6 +8,7 @@
 //   - data/logs live in %APPDATA%\aidbquery
 
 const { app, BrowserWindow, Menu, dialog, session } = require('electron');
+const fs = require('fs');
 const path = require('path');
 
 const env = require('./env');
@@ -95,11 +96,20 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     title: env.WINDOW_TITLE,
+    // Belt and braces against the inherited SW_HIDE show command: start
+    // hidden and show explicitly once the page is ready. The explicit
+    // ShowWindow(SW_SHOW) overrides whatever the launcher's STARTUPINFO
+    // asked for, and doubles as anti-white-flash on slow first loads.
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
     },
+  });
+  win.once('ready-to-show', () => {
+    win.show();
+    win.focus();
   });
 
   win.webContents.on('console-message', (_event, level, message) => {
@@ -126,6 +136,17 @@ function stopAll() {
     backend.stopBackend(backendHandle);
     backendHandle = null;
   }
+  // Clear our pid file so `adq stop` / doctor see a clean state.
+  try { fs.unlinkSync(env.electronPidFile()); } catch (err) { // ignore
+  }
+}
+
+// Advertise our pid so `adq stop` can take down the whole app (window +
+// backend) even when the window was closed uncleanly.
+try {
+  fs.writeFileSync(env.electronPidFile(), String(process.pid), 'utf8');
+} catch (err) {
+  // non-fatal: stop/doctor just lose the hint
 }
 
 app.on('window-all-closed', () => {

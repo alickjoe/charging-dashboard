@@ -41,6 +41,10 @@ function pidFile() {
   return path.join(dataDir(), 'backend.pid');
 }
 
+function electronPidFile() {
+  return path.join(dataRoot(), 'electron.pid');
+}
+
 module.exports = {
   APP_NAME,
   WINDOW_TITLE,
@@ -54,4 +58,5 @@ module.exports = {
   dataDir,
   logsDir,
   pidFile,
+  electronPidFile,
 };
