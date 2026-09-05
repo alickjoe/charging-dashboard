@@ -90,8 +90,10 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           $v = "${{ steps.version.outputs.version }}"
-          npm publish "desktop/runtime-build/package/aidbquery-runtime-win32-x64-$v.tgz" --access public
-          npm publish "desktop/aidbquery-$v.tgz" --access public
+          # "./" prefix is required: a bare `dir/file.tgz` path with a single
+          # slash gets parsed by npm as a GitHub owner/repo shorthand.
+          npm publish "./desktop/runtime-build/package/aidbquery-runtime-win32-x64-$v.tgz" --access public
+          npm publish "./desktop/aidbquery-$v.tgz" --access public
 
       - name: Create GitHub Release (tarball fallback)
         uses: softprops/action-gh-release@v2

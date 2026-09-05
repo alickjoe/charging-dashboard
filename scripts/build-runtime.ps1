@@ -110,6 +110,31 @@ Expand-Archive -Path $electronZip -DestinationPath $electronDir -Force
 if (-not (Test-Path (Join-Path $electronDir 'electron.exe'))) { throw "electron.exe missing after extract" }
 
 # ---------------------------------------------------------------------------
+Write-Step "4b/5 Trim runtime (debug symbols / stdlib test suite / dev tools)"
+# ---------------------------------------------------------------------------
+function Get-DirSizeMb($dir) {
+  [math]::Round((Get-ChildItem $dir -Recurse -File | Measure-Object Length -Sum).Sum / 1MB, 1)
+}
+$sizeBefore = Get-DirSizeMb $runtimeDir
+# Never imported by the FastAPI backend or Electron:
+#   - Lib/test: the CPython standard-library test suite
+#   - idlelib / turtledemo / Tools: desktop dev tools
+#   - *.pdb / *.lib: MSVC debug symbols and import libs
+#   - Scripts/: python-dir exe shims (we always call python -m ...)
+foreach ($t in @(
+    (Join-Path $runtimeDir 'python\Lib\test'),
+    (Join-Path $runtimeDir 'python\Lib\idlelib'),
+    (Join-Path $runtimeDir 'python\Lib\turtledemo'),
+    (Join-Path $runtimeDir 'python\Tools'),
+    (Join-Path $runtimeDir 'python\Scripts')
+  )) {
+  if (Test-Path $t) { Remove-Item -Recurse -Force $t }
+}
+Get-ChildItem -Path $runtimeDir -Recurse -File -Include *.pdb, *.lib | Remove-Item -Force
+$sizeAfter = Get-DirSizeMb $runtimeDir
+Write-Host ("  trimmed: {0} MB -> {1} MB" -f $sizeBefore, $sizeAfter)
+
+# ---------------------------------------------------------------------------
 Write-Step "5/5 Assemble + pack npm package"
 # ---------------------------------------------------------------------------
 $pkgDir = Join-Path $OutDir 'package'
