@@ -6,11 +6,40 @@ AI 数据库查询工具 — 多数据源 PostgreSQL 数据库浏览器与图表
 
 - **后端**: Python FastAPI + asyncpg
 - **前端**: React 19 + TypeScript + Vite + Ant Design + Recharts
-- **部署**: Docker Compose
+- **部署**: Docker Compose / Windows exe 安装包 / npm 桌面版（独立窗口）
 
 ## 快速开始
 
-### 1. 环境配置
+### 方式 A：npm 桌面版（Windows 11 桌面用户，推荐）
+
+无需安装 Python / Node / 管理员权限，一行命令装好并启动独立窗口（非浏览器）：
+
+```powershell
+irm https://raw.githubusercontent.com/alickjoe/charging-dashboard/main/scripts/install-aidbquery.ps1 | iex
+```
+
+已有 Node.js 18+ 时也可以直接：
+
+```bash
+npm install -g aidbquery
+adq          # 启动桌面窗口
+```
+
+常用命令：
+
+| 命令 | 说明 |
+|------|------|
+| `adq` | 启动桌面应用（后端端口 8000 被占时自动顺延） |
+| `adq doctor` | 环境自检 |
+| `adq stop` | 清理残留后端进程 |
+| `npm update -g aidbquery` | 升级 |
+| `npm uninstall -g aidbquery` | 卸载（数据保留在 `%APPDATA%\aidbquery`） |
+
+数据与日志位于 `%APPDATA%\aidbquery\`（用户级，与 Docker / exe 版互不影响）。
+
+### 方式 B：Docker Compose
+
+#### 1. 环境配置
 
 ```bash
 # 复制环境变量模板（可选，仅用于预设 LLM 默认配置）
@@ -19,7 +48,7 @@ cp .env.example .env
 
 > 无需准备外部数据库：应用自身的配置与会话数据存放在 SQLite 文件 `backend/data/config.db` 中，后端启动时自动建表并初始化；业务数据源（PostgreSQL）通过前端"连接管理"界面添加，不在 `.env` 中配置。
 
-### 2. 启动
+#### 2. 启动
 
 ```bash
 docker compose up -d
@@ -27,7 +56,7 @@ docker compose up -d
 
 仅启动两个容器服务（`frontend`、`backend`），不依赖任何外部数据库服务。
 
-### 3. 访问
+#### 3. 访问
 
 | 服务 | 地址 |
 |------|------|
@@ -41,6 +70,8 @@ docker compose up -d
 charging-dashboard/
 ├── docker-compose.yml          # Docker 编排
 ├── .env.example                # 环境变量模板
+├── desktop/                    # npm 桌面版（aidbquery 包，命令 adq）
+├── scripts/                    # 构建与安装脚本（exe 安装包 / npm 运行时 / 用户引导）
 ├── backend/
 │   ├── Dockerfile
 │   ├── requirements.txt

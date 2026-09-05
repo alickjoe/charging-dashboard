@@ -1,0 +1,103 @@
+name: npm Release
+
+# Builds the `aidbquery` + `aidbquery-runtime-win32-x64` npm packages,
+# smoke-tests them on a clean global install, publishes to npmjs.com,
+# and attaches the tarballs to a GitHub Release (offline fallback).
+# Triggered by tags like npm-v1.2.3 — fully separate from the exe
+# installer pipeline (tag v*, release.yml).
+
+on:
+  push:
+    tags:
+      - 'npm-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-test-publish:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^npm-v', ''
+          echo "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+          registry-url: 'https://registry.npmjs.org/'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Stamp version into main package
+        run: |
+          $v = "${{ steps.version.outputs.version }}"
+          $path = "desktop/package.json"
+          $pkg = Get-Content $path -Raw | ConvertFrom-Json
+          $pkg.version = $v
+          $pkg.optionalDependencies.'aidbquery-runtime-win32-x64' = $v
+          $pkg | ConvertTo-Json -Depth 10 | Set-Content $path -Encoding UTF8
+          Write-Host "aidbquery@$v (runtime dep pinned to $v)"
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm ci --no-audit --no-fund
+          $env:VITE_ELECTRON_BUILD = 'true'
+          npm run build
+          cd ..
+
+      - name: Build runtime package (python + site-packages + electron)
+        run: |
+          powershell -ExecutionPolicy Bypass -File scripts/build-runtime.ps1 -RuntimePkgVersion "${{ steps.version.outputs.version }}"
+
+      - name: Pack main package
+        env:
+          AIDB_SKIP_FRONTEND_BUILD: '1'
+        run: |
+          node desktop/scripts/pack.js
+
+      - name: Smoke test (clean global install)
+        run: |
+          $v = "${{ steps.version.outputs.version }}"
+          $tgzMain = Join-Path "desktop" "aidbquery-$v.tgz"
+          $tgzRuntime = Join-Path "desktop/runtime-build/package" "aidbquery-runtime-win32-x64-$v.tgz"
+          if (-not (Test-Path $tgzMain)) { throw "missing $tgzMain" }
+          if (-not (Test-Path $tgzRuntime)) { throw "missing $tgzRuntime" }
+          npm i -g $tgzRuntime
+          npm i -g --omit=optional $tgzMain
+          adq --check
+          if ($LASTEXITCODE -ne 0) { throw "adq --check failed" }
+          adq doctor
+          if ($LASTEXITCODE -ne 0) { throw "adq doctor failed" }
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          $v = "${{ steps.version.outputs.version }}"
+          npm publish "desktop/runtime-build/package/aidbquery-runtime-win32-x64-$v.tgz" --access public
+          npm publish "desktop/aidbquery-$v.tgz" --access public
+
+      - name: Create GitHub Release (tarball fallback)
+        uses: softprops/action-gh-release@v2
+        with:
+          name: AI DB Query npm v${{ steps.version.outputs.version }}
+          files: |
+            desktop/runtime-build/package/aidbquery-runtime-win32-x64-${{ steps.version.outputs.version }}.tgz
+            desktop/aidbquery-${{ steps.version.outputs.version }}.tgz
+          generate_release_notes: true

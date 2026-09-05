@@ -1,0 +1,45 @@
+{
+  "name": "aidbquery",
+  "version": "0.1.0",
+  "description": "AI DB Query desktop launcher — Electron standalone window + embedded FastAPI backend, installed and started from the command line",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alickjoe/charging-dashboard.git",
+    "directory": "desktop"
+  },
+  "keywords": [
+    "postgresql",
+    "database",
+    "dashboard",
+    "charts",
+    "electron",
+    "fastapi"
+  ],
+  "bin": {
+    "adq": "bin/adq.js"
+  },
+  "files": [
+    "bin/",
+    "launcher/",
+    "vendor/"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "aidbquery-runtime-win32-x64": "0.1.0"
+  },
+  "devDependencies": {
+    "electron": "34.5.8"
+  },
+  "scripts": {
+    "start": "node bin/adq.js",
+    "check": "node bin/adq.js --check",
+    "doctor": "node bin/adq.js doctor",
+    "stop": "node bin/adq.js stop"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -34,3 +34,8 @@ Thumbs.db
 
 # App data (contains credentials)
 backend/data/
+
+# npm desktop deployment build artifacts
+desktop/vendor/
+desktop/runtime-build/
+desktop/*.tgz
