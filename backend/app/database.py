@@ -30,34 +30,62 @@ def _build_dsn(row: dict) -> str:
 
 
 def _get_ssl_context(ssl_mode: str):
-    """Build SSL context from ssl_mode string."""
+    """Build SSL context used for the SSL attempts of a connection.
+
+    libpq's prefer/allow/require never verify certificates (only verify-ca /
+    verify-full do), so every SSL attempt runs with verification disabled —
+    otherwise self-signed VM/internal CAs would always fail.
+    """
     if ssl_mode in ("require", "prefer", "allow"):
         import ssl
         ctx = ssl.create_default_context()
-        if ssl_mode == "require":
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
         return ctx
     return False  # disable SSL
+
+
+def _ssl_attempt_order(ssl_mode: str) -> list:
+    """SSL attempts to try, in order, approximating libpq semantics.
+
+    asyncpg treats a passed SSL context as "SSL is mandatory", so prefer /
+    allow need explicit fallback attempts:
+      - prefer:  SSL first, fall back to plaintext
+      - allow:   plaintext first, fall back to SSL
+      - require: SSL only
+      - disable (or unknown): plaintext only
+    """
+    return {
+        "prefer": [True, False],
+        "allow": [False, True],
+        "require": [True],
+    }.get(ssl_mode, [False])
 
 
 async def create_pool_from_row(row: dict) -> asyncpg.Pool:
     """Create a single connection pool from a row dict."""
     dsn = _build_dsn(row)
-    ssl_context = _get_ssl_context(row.get("ssl_mode", "prefer"))
+    ssl_mode = row.get("ssl_mode", "prefer")
 
-    pool = await asyncio.wait_for(
-        asyncpg.create_pool(
-            dsn=dsn,
-            min_size=row.get("pool_min", 2),
-            max_size=row.get("pool_max", 10),
-            max_inactive_connection_lifetime=row.get("pool_idle", 300),
-            command_timeout=row.get("query_timeout", 30),
-            ssl=ssl_context,
-        ),
-        timeout=CONNECTION_TIMEOUT,
-    )
-    return pool
+    last_error: Exception = RuntimeError("no connection attempt was made")
+    for use_ssl in _ssl_attempt_order(ssl_mode):
+        ssl_option = _get_ssl_context(ssl_mode) if use_ssl else False
+        try:
+            pool = await asyncio.wait_for(
+                asyncpg.create_pool(
+                    dsn=dsn,
+                    min_size=row.get("pool_min", 2),
+                    max_size=row.get("pool_max", 10),
+                    max_inactive_connection_lifetime=row.get("pool_idle", 300),
+                    command_timeout=row.get("query_timeout", 30),
+                    ssl=ssl_option,
+                ),
+                timeout=CONNECTION_TIMEOUT,
+            )
+            return pool
+        except Exception as e:  # noqa: BLE001 - surfaced to the API caller
+            last_error = e
+    raise last_error
 
 
 async def create_pools_from_rows(rows: list[dict]) -> Dict[str, asyncpg.Pool]:

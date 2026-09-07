@@ -73,7 +73,7 @@ export default function ConnectionFormModal({ open, editingConnection, onClose }
         if (result.status === 'connected') {
           toast.success(t('msg.testSuccess', { ms: result.latency_ms }));
         } else {
-          toast.error(t('msg.testFail'));
+          toast.error(result.message || t('msg.testFail'));
         }
         return;
       }
@@ -89,7 +89,7 @@ export default function ConnectionFormModal({ open, editingConnection, onClose }
       if (result.status === 'connected') {
         toast.success(t('msg.testSuccess', { ms: result.latency_ms }));
       } else {
-        toast.error(t('msg.testFail'));
+        toast.error(result.message || t('msg.testFail'));
       }
     } catch {
       // validation errors ignored
