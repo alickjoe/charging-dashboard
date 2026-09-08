@@ -91,9 +91,14 @@ export default function ConnectionCard({ connection, onEdit }: ConnectionCardPro
     <Card
       title={connection.label}
       extra={
-        <Tag icon={status.icon} color={status.color}>
-          {status.text}
-        </Tag>
+        <Space size={4}>
+          {connection.tunnel_mode && (
+            <Tag color="purple">{t('connection.tunnelBadge')}</Tag>
+          )}
+          <Tag icon={status.icon} color={status.color}>
+            {status.text}
+          </Tag>
+        </Space>
       }
       style={{ width: '100%' }}
     >

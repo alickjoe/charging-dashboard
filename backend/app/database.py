@@ -7,6 +7,8 @@ from urllib.parse import quote
 
 import asyncpg
 
+from app.ws_tunnel import tunnel_manager
+
 logger = logging.getLogger(__name__)
 
 # Timeout (seconds) for establishing a single database connection.
@@ -63,9 +65,30 @@ def _ssl_attempt_order(ssl_mode: str) -> list:
 
 
 async def create_pool_from_row(row: dict) -> asyncpg.Pool:
-    """Create a single connection pool from a row dict."""
-    dsn = _build_dsn(row)
-    ssl_mode = row.get("ssl_mode", "prefer")
+    """Create a single connection pool from a row dict.
+
+    Rows with ``tunnel_mode`` set are routed through the in-process WSS
+    bridge: asyncpg talks plaintext PostgreSQL to a loopback listener and the
+    bridge carries the bytes inside a WebSocket session to the real host.
+    ``ssl_mode`` is ignored for tunnelled connections (encryption is provided
+    by the WSS transport itself).
+    """
+    connect_row = dict(row)
+    if int(connect_row.get("tunnel_mode") or 0):
+        local_port = await tunnel_manager.ensure(
+            str(connect_row.get("name") or f"tunnel-{connect_row['host']}"),
+            connect_row["host"],
+            int(connect_row.get("tunnel_port") or 443),
+            connect_row.get("tunnel_path") or "/pgwss",
+            connect_row.get("tunnel_auth_user"),
+            connect_row.get("tunnel_auth_password"),
+        )
+        connect_row["host"] = "127.0.0.1"
+        connect_row["port"] = local_port
+        connect_row["ssl_mode"] = "disable"
+
+    dsn = _build_dsn(connect_row)
+    ssl_mode = connect_row.get("ssl_mode", "prefer")
 
     last_error: Exception = RuntimeError("no connection attempt was made")
     for use_ssl in _ssl_attempt_order(ssl_mode):

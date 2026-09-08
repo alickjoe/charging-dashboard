@@ -35,6 +35,11 @@ CREATE TABLE IF NOT EXISTS db_connections (
     pool_max      INTEGER NOT NULL DEFAULT 10,
     pool_idle     INTEGER NOT NULL DEFAULT 300,
     query_timeout INTEGER NOT NULL DEFAULT 30,
+    tunnel_mode            INTEGER NOT NULL DEFAULT 0,
+    tunnel_path            TEXT NOT NULL DEFAULT '/pgwss',
+    tunnel_port            INTEGER NOT NULL DEFAULT 443,
+    tunnel_auth_user       TEXT,
+    tunnel_auth_password   TEXT,
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -245,6 +250,18 @@ async def init_db() -> None:
                 )
             except sqlite3.OperationalError:
                 pass  # Column already exists
+            # Migration: WSS tunnel (corporate network mode) columns
+            for _stmt in (
+                "ALTER TABLE db_connections ADD COLUMN tunnel_mode INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE db_connections ADD COLUMN tunnel_path TEXT NOT NULL DEFAULT '/pgwss'",
+                "ALTER TABLE db_connections ADD COLUMN tunnel_port INTEGER NOT NULL DEFAULT 443",
+                "ALTER TABLE db_connections ADD COLUMN tunnel_auth_user TEXT",
+                "ALTER TABLE db_connections ADD COLUMN tunnel_auth_password TEXT",
+            ):
+                try:
+                    conn.execute(_stmt)
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
             conn.commit()
         finally:
             conn.close()
@@ -285,6 +302,12 @@ class ConnectionStore:
     async def create(data: dict) -> dict:
         data = {**data}
         data["password"] = _encrypt(data["password"])
+        data.setdefault("tunnel_mode", 0)
+        data.setdefault("tunnel_path", "/pgwss")
+        data.setdefault("tunnel_port", 443)
+        data.setdefault("tunnel_auth_user", None)
+        tap = data.get("tunnel_auth_password")
+        data["tunnel_auth_password"] = _encrypt(tap) if tap else None
 
         def _do():
             conn = _get_conn()
@@ -292,9 +315,13 @@ class ConnectionStore:
                 conn.execute(
                     """INSERT INTO db_connections
                        (name, label, host, port, database, username, password,
-                        ssl_mode, pool_min, pool_max, pool_idle, query_timeout)
+                        ssl_mode, pool_min, pool_max, pool_idle, query_timeout,
+                        tunnel_mode, tunnel_path, tunnel_port,
+                        tunnel_auth_user, tunnel_auth_password)
                        VALUES (:name, :label, :host, :port, :database, :username, :password,
-                               :ssl_mode, :pool_min, :pool_max, :pool_idle, :query_timeout)""",
+                               :ssl_mode, :pool_min, :pool_max, :pool_idle, :query_timeout,
+                               :tunnel_mode, :tunnel_path, :tunnel_port,
+                               :tunnel_auth_user, :tunnel_auth_password)""",
                     data,
                 )
                 conn.commit()
@@ -326,13 +353,23 @@ class ConnectionStore:
                 else:
                     merged["password"] = existing["password"]
 
+                # Tunnel auth password: empty string means "keep the stored value"
+                # (mirrors the main password edit UX); a real value is re-encrypted.
+                if data.get("tunnel_auth_password"):
+                    merged["tunnel_auth_password"] = _encrypt(data["tunnel_auth_password"])
+                else:
+                    merged["tunnel_auth_password"] = existing["tunnel_auth_password"]
+
                 merged["updated_at"] = None  # triggers default
                 conn.execute(
                     """UPDATE db_connections SET
                        label=:label, host=:host, port=:port, database=:database,
                        username=:username, password=:password, ssl_mode=:ssl_mode,
                        pool_min=:pool_min, pool_max=:pool_max, pool_idle=:pool_idle,
-                       query_timeout=:query_timeout, updated_at=datetime('now')
+                       query_timeout=:query_timeout, updated_at=datetime('now'),
+                       tunnel_mode=:tunnel_mode, tunnel_path=:tunnel_path,
+                       tunnel_port=:tunnel_port, tunnel_auth_user=:tunnel_auth_user,
+                       tunnel_auth_password=:tunnel_auth_password
                        WHERE name=:name""",
                     {**merged, "name": name},
                 )
@@ -361,9 +398,11 @@ class ConnectionStore:
 
     @staticmethod
     def decrypt_password(row: dict) -> dict:
-        """Decrypt the password field in a connection row."""
+        """Decrypt secret fields (password + tunnel auth password) in a row."""
         if row and "password" in row:
             row["password"] = _decrypt(row["password"])
+        if row and row.get("tunnel_auth_password"):
+            row["tunnel_auth_password"] = _decrypt(row["tunnel_auth_password"])
         return row
 
 

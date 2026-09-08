@@ -9,6 +9,7 @@ from app.schemas.connection import (
 )
 from app.sqlite_store import ConnectionStore
 from app.database import create_pool_from_row, rebuild_pool, destroy_pool
+from app.ws_tunnel import tunnel_manager
 
 router = APIRouter(prefix="/api/v1/connections", tags=["connections-crud"])
 
@@ -28,6 +29,11 @@ def _row_to_brief(row: dict) -> dict:
         "pool_max": row.get("pool_max", 10),
         "pool_idle": row.get("pool_idle", 300),
         "query_timeout": row.get("query_timeout", 30),
+        "tunnel_mode": bool(row.get("tunnel_mode")),
+        "tunnel_path": row.get("tunnel_path") or "/pgwss",
+        "tunnel_port": row.get("tunnel_port") or 443,
+        "tunnel_auth_user": row.get("tunnel_auth_user"),
+        "has_tunnel_auth": bool(row.get("tunnel_auth_password")),
     }
 
 
@@ -48,6 +54,7 @@ async def create_connection(body: CreateConnectionRequest, request: Request):
         request.app.state.pools[body.name] = pool
     except Exception as e:
         await ConnectionStore.delete(body.name)
+        await tunnel_manager.stop(body.name)
         raise HTTPException(status_code=400, detail=f"无法建立连接: {str(e)}")
 
     return _row_to_brief(row)
@@ -77,6 +84,10 @@ async def update_connection(name: str, body: UpdateConnectionRequest, request: R
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"无法重建连接池: {str(e)}")
 
+    # Tunnel turned off in this update → tear down the no-longer-used bridge
+    if not row.get("tunnel_mode"):
+        await tunnel_manager.stop(name)
+
     return _row_to_brief(row)
 
 
@@ -85,5 +96,6 @@ async def delete_connection(name: str, request: Request):
     """Delete a database connection and destroy its pool."""
     await destroy_pool(name, request.app.state.pools)
     deleted = await ConnectionStore.delete(name)
+    await tunnel_manager.stop(name)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"连接 '{name}' 不存在")

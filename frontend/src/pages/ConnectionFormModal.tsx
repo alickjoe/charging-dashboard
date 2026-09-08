@@ -1,4 +1,4 @@
-import { Modal, Form, Input, InputNumber, Select, Button } from 'antd';
+import { Modal, Form, Input, InputNumber, Select, Button, Switch, Typography } from 'antd';
 import { useState, useEffect } from 'react';
 import { createConnection, updateConnection, testTempConnection } from '../api/connections-admin';
 import { testConnection } from '../api/connections';
@@ -22,6 +22,7 @@ export default function ConnectionFormModal({ open, editingConnection, onClose }
   const queryClient = useQueryClient();
 
   const isEdit = !!editingConnection;
+  const tunnelMode = Form.useWatch('tunnel_mode', form) ?? false;
 
   // Populate the form whenever the modal opens. A plain `initialValues`
   // snapshot is not enough: after a previous open/close cycle the form
@@ -42,6 +43,11 @@ export default function ConnectionFormModal({ open, editingConnection, onClose }
             pool_max: editingConnection!.pool_max,
             pool_idle: editingConnection!.pool_idle,
             query_timeout: editingConnection!.query_timeout,
+            tunnel_mode: !!editingConnection!.tunnel_mode,
+            tunnel_path: editingConnection!.tunnel_path || '/pgwss',
+            tunnel_port: editingConnection!.tunnel_port || 443,
+            tunnel_auth_user: editingConnection!.tunnel_auth_user || undefined,
+            tunnel_auth_password: undefined,
             username: undefined,
             password: undefined,
           }
@@ -56,6 +62,11 @@ export default function ConnectionFormModal({ open, editingConnection, onClose }
             pool_max: 10,
             pool_idle: 300,
             query_timeout: 30,
+            tunnel_mode: false,
+            tunnel_path: '/pgwss',
+            tunnel_port: 443,
+            tunnel_auth_user: undefined,
+            tunnel_auth_password: undefined,
             username: undefined,
             password: undefined,
           }
@@ -85,6 +96,11 @@ export default function ConnectionFormModal({ open, editingConnection, onClose }
         password: values.password,
         ssl_mode: values.ssl_mode,
         query_timeout: values.query_timeout,
+        tunnel_mode: !!values.tunnel_mode,
+        tunnel_path: values.tunnel_path,
+        tunnel_port: values.tunnel_port,
+        tunnel_auth_user: values.tunnel_auth_user,
+        tunnel_auth_password: values.tunnel_auth_password,
       });
       if (result.status === 'connected') {
         toast.success(t('msg.testSuccess', { ms: result.latency_ms }));
@@ -108,6 +124,7 @@ export default function ConnectionFormModal({ open, editingConnection, onClose }
         const payload: UpdateConnectionRequest = { ...values };
         if (!payload.username) delete payload.username;
         if (!payload.password) delete payload.password;
+        if (!payload.tunnel_auth_password) delete payload.tunnel_auth_password;
         await updateConnection(editingConnection!.name, payload);
         toast.success(t('msg.updated'));
       } else {
@@ -160,8 +177,11 @@ export default function ConnectionFormModal({ open, editingConnection, onClose }
                 pool_max: editingConnection!.pool_max,
                 pool_idle: editingConnection!.pool_idle,
                 query_timeout: editingConnection!.query_timeout,
+                tunnel_mode: !!editingConnection!.tunnel_mode,
+                tunnel_path: editingConnection!.tunnel_path || '/pgwss',
+                tunnel_port: editingConnection!.tunnel_port || 443,
               }
-            : { port: 5432, ssl_mode: 'prefer', pool_min: 2, pool_max: 10, pool_idle: 300, query_timeout: 30 }
+            : { port: 5432, ssl_mode: 'prefer', pool_min: 2, pool_max: 10, pool_idle: 300, query_timeout: 30, tunnel_mode: false, tunnel_path: '/pgwss', tunnel_port: 443 }
         }
       >
         <Form.Item name="name" label={t('connectionForm.name')} rules={[{ required: true, message: t('validation.nameRequired') }]}>
@@ -185,7 +205,34 @@ export default function ConnectionFormModal({ open, editingConnection, onClose }
         <Form.Item name="password" label={t('connectionForm.password')} rules={isEdit ? [] : [{ required: true, message: t('validation.passwordRequired') }]}>
           <Input.Password placeholder={isEdit ? t('connectionForm.passwordEditPlaceholder') : t('connectionForm.passwordPlaceholder')} />
         </Form.Item>
-        <Form.Item name="ssl_mode" label={t('connectionForm.sslMode')}>
+        <Form.Item
+          name="tunnel_mode"
+          label={t('connectionForm.tunnelMode')}
+          valuePropName="checked"
+          tooltip={t('connectionForm.tunnelModeHint')}
+        >
+          <Switch />
+        </Form.Item>
+        {tunnelMode && (
+          <>
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 12, marginTop: -4 }}>
+              {t('connectionForm.tunnelHint')}
+            </Typography.Paragraph>
+            <Form.Item name="tunnel_path" label={t('connectionForm.tunnelPath')} rules={[{ required: true, message: t('validation.tunnelPathRequired') }]}>
+              <Input placeholder="/pgwss" />
+            </Form.Item>
+            <Form.Item name="tunnel_port" label={t('connectionForm.tunnelPort')} rules={[{ required: true }]}>
+              <InputNumber min={1} max={65535} style={{ width: '100%' }} />
+            </Form.Item>
+            <Form.Item name="tunnel_auth_user" label={t('connectionForm.tunnelAuthUser')}>
+              <Input placeholder={t('connectionForm.tunnelAuthOptional')} />
+            </Form.Item>
+            <Form.Item name="tunnel_auth_password" label={t('connectionForm.tunnelAuthPassword')}>
+              <Input.Password placeholder={isEdit ? t('connectionForm.tunnelAuthEditPlaceholder') : t('connectionForm.tunnelAuthOptional')} />
+            </Form.Item>
+          </>
+        )}
+        <Form.Item name="ssl_mode" label={t('connectionForm.sslMode')} extra={tunnelMode ? t('connectionForm.sslModeTunnelExtra') : undefined}>
           <Select
             options={[
               { value: 'disable', label: t('connectionForm.sslDisable') },

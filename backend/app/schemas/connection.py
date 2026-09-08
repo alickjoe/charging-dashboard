@@ -20,6 +20,11 @@ class ConnectionResponse(BaseModel):
     pool_max: int = 10
     pool_idle: int = 300
     query_timeout: int = 30
+    tunnel_mode: bool = False
+    tunnel_path: str = "/pgwss"
+    tunnel_port: int = 443
+    tunnel_auth_user: Optional[str] = None
+    has_tunnel_auth: bool = False
 
 
 class TestConnectionResponse(BaseModel):
@@ -42,6 +47,11 @@ class CreateConnectionRequest(BaseModel):
     pool_max: int = Field(default=10, ge=1, le=100)
     pool_idle: int = Field(default=300, ge=10)
     query_timeout: int = Field(default=30, ge=1, le=300)
+    tunnel_mode: bool = False
+    tunnel_path: str = "/pgwss"
+    tunnel_port: int = Field(default=443, ge=1, le=65535)
+    tunnel_auth_user: Optional[str] = None
+    tunnel_auth_password: Optional[str] = None
 
 
 class UpdateConnectionRequest(BaseModel):
@@ -56,6 +66,11 @@ class UpdateConnectionRequest(BaseModel):
     pool_max: Optional[int] = Field(default=None, ge=1, le=100)
     pool_idle: Optional[int] = Field(default=None, ge=10)
     query_timeout: Optional[int] = Field(default=None, ge=1, le=300)
+    tunnel_mode: Optional[bool] = None
+    tunnel_path: Optional[str] = None
+    tunnel_port: Optional[int] = Field(default=None, ge=1, le=65535)
+    tunnel_auth_user: Optional[str] = None
+    tunnel_auth_password: Optional[str] = None
 
 
 class TestTempConnectionRequest(BaseModel):
@@ -66,3 +81,8 @@ class TestTempConnectionRequest(BaseModel):
     password: str
     ssl_mode: str = "prefer"
     query_timeout: int = 30
+    tunnel_mode: bool = False
+    tunnel_path: str = "/pgwss"
+    tunnel_port: int = Field(default=443, ge=1, le=65535)
+    tunnel_auth_user: Optional[str] = None
+    tunnel_auth_password: Optional[str] = None

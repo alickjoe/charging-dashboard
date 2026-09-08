@@ -12,6 +12,11 @@ export interface ConnectionInfo {
   pool_max: number;
   pool_idle: number;
   query_timeout: number;
+  tunnel_mode: boolean;
+  tunnel_path: string;
+  tunnel_port: number;
+  tunnel_auth_user: string | null;
+  has_tunnel_auth: boolean;
 }
 
 export interface DbConnectionConfig {
@@ -27,6 +32,11 @@ export interface DbConnectionConfig {
   pool_max: number;
   pool_idle: number;
   query_timeout: number;
+  tunnel_mode?: boolean;
+  tunnel_path?: string;
+  tunnel_port?: number;
+  tunnel_auth_user?: string;
+  tunnel_auth_password?: string;
 }
 
 export type CreateConnectionRequest = DbConnectionConfig;
@@ -41,6 +51,11 @@ export interface TestTempRequest {
   password: string;
   ssl_mode: string;
   query_timeout: number;
+  tunnel_mode?: boolean;
+  tunnel_path?: string;
+  tunnel_port?: number;
+  tunnel_auth_user?: string;
+  tunnel_auth_password?: string;
 }
 
 export interface TestTempResult {

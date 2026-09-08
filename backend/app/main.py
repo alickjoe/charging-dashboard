@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import create_pools_from_rows, close_pools
 from app.sqlite_store import init_db, ConnectionStore, LLMConfigStore
+from app.ws_tunnel import tunnel_manager
 from app.routers import connections, connection_admin, databases, charts, llm, conversations, custom_query, skills
 
 
@@ -21,6 +22,7 @@ async def lifespan(app: FastAPI):
     app.state.pools = await create_pools_from_rows(rows)
     yield
     await close_pools(app.state.pools)
+    await tunnel_manager.stop_all()
 
 
 app = FastAPI(

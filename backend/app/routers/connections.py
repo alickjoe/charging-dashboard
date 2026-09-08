@@ -42,6 +42,11 @@ async def test_temp_connection_endpoint(body: TestTempConnectionRequest):
         "password": body.password,
         "ssl_mode": body.ssl_mode,
         "query_timeout": body.query_timeout,
+        "tunnel_mode": body.tunnel_mode,
+        "tunnel_path": body.tunnel_path,
+        "tunnel_port": body.tunnel_port,
+        "tunnel_auth_user": body.tunnel_auth_user,
+        "tunnel_auth_password": body.tunnel_auth_password,
         "pool_min": 1,
         "pool_max": 2,
     }

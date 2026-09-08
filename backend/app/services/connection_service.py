@@ -3,11 +3,13 @@
 import asyncio
 import time
 import logging
+import uuid
 from typing import Dict
 
 import asyncpg
 
 from app.database import create_pool_from_row
+from app.ws_tunnel import tunnel_manager
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,11 @@ async def get_connection_list(pools: Dict[str, asyncpg.Pool]) -> list[dict]:
             "pool_max": row.get("pool_max", 10),
             "pool_idle": row.get("pool_idle", 300),
             "query_timeout": row.get("query_timeout", 30),
+            "tunnel_mode": bool(row.get("tunnel_mode")),
+            "tunnel_path": row.get("tunnel_path") or "/pgwss",
+            "tunnel_port": row.get("tunnel_port") or 443,
+            "tunnel_auth_user": row.get("tunnel_auth_user"),
+            "has_tunnel_auth": bool(row.get("tunnel_auth_password")),
         }
         for row in rows
     ]
@@ -92,9 +99,32 @@ async def test_single_connection(
 
 
 async def test_temp_connection(params: dict) -> dict:
-    """Test a connection with temporary parameters (not saved to store)."""
+    """Test a connection with temporary parameters (not saved to store).
+
+    Tunnelled params (``tunnel_mode``) go through an *ephemeral* local
+    bridge that is torn down right after the test, so unsaved form values
+    never disturb the persistent bridge of a same-named saved connection.
+    """
+    temp_key = None
     try:
         start = time.monotonic()
+        if int(params.get("tunnel_mode") or 0):
+            temp_key = f"temp-test-{uuid.uuid4().hex}"
+            local_port = await tunnel_manager.ensure(
+                temp_key,
+                params["host"],
+                int(params.get("tunnel_port") or 443),
+                params.get("tunnel_path") or "/pgwss",
+                params.get("tunnel_auth_user"),
+                params.get("tunnel_auth_password"),
+            )
+            params = {
+                **params,
+                "host": "127.0.0.1",
+                "port": local_port,
+                "ssl_mode": "disable",
+                "tunnel_mode": 0,
+            }
         pool = await create_pool_from_row(params)
         try:
             async with pool.acquire() as conn:
@@ -107,6 +137,8 @@ async def test_temp_connection(params: dict) -> dict:
             }
         finally:
             await pool.close()
+            if temp_key:
+                await tunnel_manager.stop(temp_key)
     except asyncio.TimeoutError:
         return {
             "status": "error",
