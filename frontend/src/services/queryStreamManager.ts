@@ -208,6 +208,9 @@ class QueryStreamManager {
   // ── Stream event handling ──
 
   private handleEvent(uid: number, event: SSEEvent): void {
+    // Any event proves the stream is alive — make sure the elapsed ticker is
+    // running (it self-stops when no stream is active).
+    this.ensureTicker();
     switch (event.type) {
       case 'conversation': {
         const convId = event.conversation_id ?? null;
@@ -247,10 +250,13 @@ class QueryStreamManager {
         }));
         break;
       case 'error':
-        // Non-fatal agent errors (SQL failure, bad tool args…) stream as blocks;
-        // the loop usually continues afterwards.
+        // Non-fatal agent errors (SQL failure, bad tool args, LLM partial
+        // timeout…) stream as blocks and the loop usually CONTINUES
+        // afterwards. Keep the current active phase — flipping to 'error'
+        // here would falsely render the "connection lost" tag mid-query and
+        // could stop the elapsed ticker on a phase-flap tick.
         this.patch(uid, (q) => ({
-          phase: 'error',
+          phase: isActivePhase(q.phase) ? q.phase : 'executing',
           blocks: [...q.blocks, { key: this.nextBlockKey(), type: 'error', content: event.message || '' }],
         }));
         break;
