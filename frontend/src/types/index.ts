@@ -176,7 +176,7 @@ export interface NLQueryResponse {
   cannot_answer?: string;
 }
 
-export type SSEEventType = 'think' | 'sql' | 'result' | 'error' | 'done';
+export type SSEEventType = 'conversation' | 'think' | 'sql' | 'result' | 'error' | 'done';
 
 export interface SSEEvent {
   type: SSEEventType;

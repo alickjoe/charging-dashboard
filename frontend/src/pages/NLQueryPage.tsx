@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, memo, useMemo } from 'react';
+import { useState, useRef, useEffect, memo, useMemo, useSyncExternalStore } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Select, Input, Button, Card, Space, Spin, Alert, Typography,
@@ -12,12 +12,15 @@ import {
 } from '@ant-design/icons';
 import { fetchConnections } from '../api/connections';
 import { fetchSchemas } from '../api/databases';
-import { fetchLLMConfigs, executeNLQueryStream } from '../api/llm';
+import { fetchLLMConfigs } from '../api/llm';
 import { fetchConversations, fetchConversationDetail, deleteConversation } from '../api/conversations';
 import { fetchSkills } from '../api/skills';
+import { queryStreamManager, isActivePhase } from '../services/queryStreamManager';
+import type { QueryStream, StreamBlock, StreamBlockType } from '../services/queryStreamManager';
 import MarkdownRenderer from '../components/Markdown';
+import { useToast } from '../components/Toast';
 import type {
-  ConnectionInfo, ConnectionSchemaSelection, LLMConfig, SSEEvent,
+  ConnectionInfo, ConnectionSchemaSelection, LLMConfig,
   Conversation, ConversationDetail, ConversationMessage,
   Skill,
 } from '../types';
@@ -27,20 +30,7 @@ import { useLanguageStore } from '../i18n/store';
 const { TextArea } = Input;
 const { Paragraph, Text } = Typography;
 
-// ─── Phase & Block Types ─────────────────────────────────────────
-
-type StreamPhase = 'idle' | 'connecting' | 'thinking' | 'executing' | 'done' | 'error';
-
-type StreamBlockType = 'think' | 'sql' | 'result' | 'error' | 'summary';
-
-interface StreamBlock {
-  key: number;
-  type: StreamBlockType;
-  content: string;
-  columns?: string[];
-  rows?: unknown[][];
-  totalRows?: number;
-}
+// ─── Block Types (stream state lives in queryStreamManager) ──────
 
 // ─── Markdown rendering is delegated to <MarkdownRenderer /> ─────
 
@@ -221,23 +211,19 @@ export default function NLQueryPage() {
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
 
   // ── Query / streaming state ──
+  // Streaming state lives in queryStreamManager (module scope): navigating
+  // away from this page or switching conversations does NOT abort a running
+  // query — the view below simply re-attaches to the live stream.
+  const streams = useSyncExternalStore(
+    queryStreamManager.subscribe,
+    queryStreamManager.getSnapshot,
+  );
   const [question, setQuestion] = useState('');
-  const [querying, setQuerying] = useState(false);
-  const [streamingBlocks, setStreamingBlocks] = useState<StreamBlock[]>([]);
-  const [streamingThink, setStreamingThink] = useState('');
-  const [llmTime, setLlmTime] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [streamPhase, setStreamPhase] = useState<StreamPhase>('idle');
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const blockKeyRef = useRef(0);
-  const abortRef = useRef<AbortController | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
-  // Throttle refs for smooth streaming
-  const thinkBufferRef = useRef('');
-  const flushTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const elapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const startTimeRef = useRef(0);
+  // Streams whose conversation we already auto-jumped into on `done`
+  const jumpedToConvRef = useRef<Set<number>>(new Set());
+  const toast = useToast();
 
   // ── Skill selection ──
   const [selectedSkillIds, setSelectedSkillIds] = useState<number[]>([]);
@@ -303,24 +289,25 @@ export default function NLQueryPage() {
     let cancelled = false;
     fetchConversationDetail(activeConvId).then((detail) => {
       if (cancelled) return;
-      setMessages(detail.messages || []);
+      const loaded = detail.messages || [];
+      setMessages(loaded);
       setActiveConvMeta({
         id: detail.id,
         title: detail.title,
         connection_name: detail.connection_name,
         llm_config_id: detail.llm_config_id,
         connection_schemas: detail.connection_schemas || [],
-        message_count: detail.messages?.length || 0,
+        message_count: loaded.length,
         skill_ids: detail.skill_ids || [],
         created_at: detail.created_at,
         updated_at: detail.updated_at,
       });
-      // Clear streaming state now that DB messages are loaded
-      setStreamingBlocks([]);
-      setStreamingThink('');
-      setLlmTime(null);
-      setError(null);
-      blockKeyRef.current = 0;
+      // Persisted history now carries the exchange content — drop finished
+      // streams for this conversation so nothing renders twice. Running
+      // streams are kept so a live query keeps streaming.
+      if (loaded.length > 0) {
+        queryStreamManager.clearFinishedForConv(activeConvId);
+      }
     }).catch(() => {
       if (!cancelled) setMessages([]);
     });
@@ -330,60 +317,44 @@ export default function NLQueryPage() {
   // ── Auto-scroll ──
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, streamingBlocks, streamingThink]);
+  }, [messages, streams]);
 
-  // ── Helpers ──
-  const resetStreamState = () => {
-    setStreamingBlocks([]);
-    setStreamingThink('');
-    setLlmTime(null);
-    setError(null);
-    setStreamPhase('idle');
-    setElapsedSeconds(0);
-    blockKeyRef.current = 0;
-    thinkBufferRef.current = '';
-  };
+  // ── Streams visible in the current view ──
+  // A stream renders here if it was started from this view (new chat = null)
+  // or belongs to this conversation. Streams whose exchange was interrupted
+  // with zero content are dropped, mirroring the old behaviour.
+  const visibleStreams = useMemo(() => {
+    const view = activeConvId ?? null;
+    return streams.filter((s) => {
+      if (s.hidden) return false;
+      if (s.viewConversationId !== view && s.conversationId !== view) return false;
+      if (!isActivePhase(s.phase) && s.blocks.length === 0 && !s.think && !s.error) return false;
+      return true;
+    });
+  }, [streams, activeConvId]);
 
-  // ── Flush / Timer helpers ──
-  const startFlushTimer = useCallback(() => {
-    if (flushTimerRef.current) return;
-    flushTimerRef.current = setInterval(() => {
-      const buf = thinkBufferRef.current;
-      if (buf) {
-        thinkBufferRef.current = '';
-        setStreamingThink((prev) => prev + buf);
+  const runningStream = useMemo(
+    () => visibleStreams.find((s) => isActivePhase(s.phase)) || null,
+    [visibleStreams],
+  );
+  const querying = !!runningStream;
+
+  // ── Jump into the conversation once the backend announces it on `done` ──
+  useEffect(() => {
+    if (activeConvId !== null) return;
+    for (const s of streams) {
+      if (
+        s.phase === 'done' &&
+        s.conversationId !== null &&
+        s.viewConversationId === null &&
+        !jumpedToConvRef.current.has(s.uid)
+      ) {
+        jumpedToConvRef.current.add(s.uid);
+        setActiveConvId(s.conversationId);
+        break;
       }
-    }, 50);
-  }, []);
-
-  const stopFlushTimer = useCallback(() => {
-    if (flushTimerRef.current) {
-      clearInterval(flushTimerRef.current);
-      flushTimerRef.current = null;
     }
-    // Flush any remaining buffer
-    const buf = thinkBufferRef.current;
-    if (buf) {
-      thinkBufferRef.current = '';
-      setStreamingThink((prev) => prev + buf);
-    }
-  }, []);
-
-  const startElapsedTimer = useCallback(() => {
-    startTimeRef.current = Date.now();
-    setElapsedSeconds(0);
-    if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
-    elapsedTimerRef.current = setInterval(() => {
-      setElapsedSeconds((Date.now() - startTimeRef.current) / 1000);
-    }, 200);
-  }, []);
-
-  const stopElapsedTimer = useCallback(() => {
-    if (elapsedTimerRef.current) {
-      clearInterval(elapsedTimerRef.current);
-      elapsedTimerRef.current = null;
-    }
-  }, []);
+  }, [streams, activeConvId]);
 
   const handleSend = () => {
     // Effective connection selections: conversation-bound or global multi-select
@@ -411,148 +382,49 @@ export default function NLQueryPage() {
         .join('\n\n');
     }
 
-    if (!conn || !llmId || !effectiveQuestion) return;
+    // Surface missing preconditions instead of failing silently
+    if (!conn || !llmId || !effectiveQuestion) {
+      if (!conn) toast.error(t('chat.errNoDatabase'));
+      else if (!llmId) toast.error(t('chat.errNoModel'));
+      else toast.error(t('chat.errNoQuestion'));
+      return;
+    }
 
-    setQuerying(true);
-    resetStreamState();
-    setStreamPhase('connecting');
-    startFlushTimer();
-    startElapsedTimer();
-
-    // Helper to flush think buffer into streamingBlocks before phase change.
-    // `trimTail` removes the final conclusion from the pending think content
-    // (the conclusion is rendered once as a dedicated 'summary' block instead).
-    const flushBufferToBlocks = (trimTail?: string) => {
-      const buf = thinkBufferRef.current;
-      thinkBufferRef.current = '';
-      setStreamingThink((prev) => {
-        let combined = prev + buf;
-        const tail = trimTail?.trimEnd();
-        if (tail) {
-          const trimmed = combined.trimEnd();
-          if (trimmed.endsWith(tail)) {
-            combined = trimmed.slice(0, trimmed.length - tail.length).trimEnd();
-          }
-        }
-        if (combined.trim()) {
-          setStreamingBlocks((b) => [
-            ...b,
-            { key: blockKeyRef.current++, type: 'think', content: combined },
-          ]);
-        }
-        return '';
-      });
-    };
-
-    abortRef.current = executeNLQueryStream(
-      {
-        connection_name: conn,
-        connection_schemas: connSelections,
-        llm_config_id: llmId,
-        question: effectiveQuestion,
-        conversation_id: activeConvId ?? undefined,
-        language: language,
-        skill_ids: selectedSkillIds.length > 0 ? selectedSkillIds : undefined,
-      },
-      (event: SSEEvent) => {
-        switch (event.type) {
-          case 'think':
-            setStreamPhase('thinking');
-            thinkBufferRef.current += (event.content || '');
-            break;
-          case 'sql':
-            setStreamPhase('executing');
-            flushBufferToBlocks();
-            setStreamingBlocks((prev) => [
-              ...prev,
-              { key: blockKeyRef.current++, type: 'sql', content: event.content || '' },
-            ]);
-            break;
-          case 'result':
-            setStreamPhase('executing');
-            setStreamingBlocks((prev) => [
-              ...prev,
-              {
-                key: blockKeyRef.current++,
-                type: 'result',
-                content: '',
-                columns: event.columns,
-                rows: event.rows,
-                totalRows: event.total_rows,
-              },
-            ]);
-            break;
-          case 'error':
-            setStreamPhase('error');
-            setStreamingBlocks((prev) => [
-              ...prev,
-              { key: blockKeyRef.current++, type: 'error', content: event.message || '' },
-            ]);
-            break;
-          case 'done':
-            setStreamPhase('done');
-            // Drop the conclusion from the pending think content…
-            flushBufferToBlocks(event.message || '');
-            // …and show it exactly once as the "analysis done" summary block
-            if (event.message) {
-              setStreamingBlocks((prev) => [
-                ...prev,
-                { key: blockKeyRef.current++, type: 'summary', content: event.message || '' },
-              ]);
-            }
-            if (event.llm_time_ms) setLlmTime(event.llm_time_ms);
-            // Set active conversation from done event
-            if (event.conversation_id && !activeConvId) {
-              setActiveConvId(event.conversation_id);
-            }
-            break;
-        }
-      },
-      (err: string) => {
-        setError(err);
-        setStreamPhase('error');
-      },
-      () => {
-        stopFlushTimer();
-        stopElapsedTimer();
-        setQuerying(false);
-        // Refresh conversation list after query completes
+    queryStreamManager.start({
+      connectionName: conn,
+      connectionSchemas: connSelections,
+      llmConfigId: llmId,
+      question: effectiveQuestion,
+      language: language,
+      skillIds: selectedSkillIds.length > 0 ? selectedSkillIds : undefined,
+      conversationId: activeConvId ?? undefined,
+      viewConversationId: activeConvId,
+      scopeTags: dbScopeTags,
+      onConversationKnown: () => {
+        // The (possibly brand-new) conversation can now be found in the sidebar
         queryClient.invalidateQueries({ queryKey: ['conversations'] });
       },
-    );
+      onSettled: () => {
+        // Refresh conversation list after query settles (done/error/stop)
+        queryClient.invalidateQueries({ queryKey: ['conversations'] });
+      },
+    });
+    setQuestion('');
+    setShowSkillPicker(false);
+    setSlashFilter('');
   };
 
   const handleStop = () => {
-    abortRef.current?.abort();
-    stopFlushTimer();
-    stopElapsedTimer();
-    setQuerying(false);
-    setStreamPhase('idle');
-    // Flush think buffer + streamingThink to blocks
-    const buf = thinkBufferRef.current;
-    thinkBufferRef.current = '';
-    setStreamingThink((prev) => {
-      const combined = prev + buf;
-      if (combined.trim()) {
-        setStreamingBlocks((b) => [
-          ...b,
-          { key: blockKeyRef.current++, type: 'think', content: combined },
-        ]);
-      }
-      return '';
-    });
+    if (runningStream) queryStreamManager.abort(runningStream.uid);
   };
 
   const handleNewChat = () => {
-    // Cancel any ongoing query
-    abortRef.current?.abort();
-    stopFlushTimer();
-    stopElapsedTimer();
-    setQuerying(false);
+    // Running queries keep running — they stay attached to their own
+    // conversation and remain visible when switching back to it.
+    queryStreamManager.detachFromNewChat();
     setActiveConvId(null);
     setActiveConvMeta(null);
     setMessages([]);
-    resetStreamState();
     setQuestion('');
     setSelectedConns([]);
     setSchemaFilters({});
@@ -562,15 +434,10 @@ export default function NLQueryPage() {
   };
 
   const handleSelectConv = (conv: Conversation) => {
-    if (querying) {
-      abortRef.current?.abort();
-      stopFlushTimer();
-      stopElapsedTimer();
-      setQuerying(false);
-    }
+    // NOTE: no abort here — a running query keeps running and stays attached
+    // to its conversation; switching views never interrupts it.
     setActiveConvId(conv.id);
     setMessages([]);
-    resetStreamState();
     setQuestion('');
   };
 
@@ -580,8 +447,9 @@ export default function NLQueryPage() {
       setActiveConvId(null);
       setActiveConvMeta(null);
       setMessages([]);
-      resetStreamState();
     }
+    // Drop any finished streams attached to the deleted conversation
+    queryStreamManager.clearFinishedForConv(id);
     queryClient.invalidateQueries({ queryKey: ['conversations'] });
   };
 
@@ -634,14 +502,12 @@ export default function NLQueryPage() {
   const displayMessages = [...messages];
 
   // ── Memoized streaming think node to avoid re-parsing on elapsed timer ticks ──
-  const streamingThinkNode = useMemo(() => {
-    if (!streamingThink) return null;
-    return (
+  const renderThinkNode = (think: string) =>
+    think ? (
       <div style={{ marginBottom: 16 }}>
-        <MarkdownRenderer text={streamingThink} />
+        <MarkdownRenderer text={think} />
       </div>
-    );
-  }, [streamingThink]);
+    ) : null;
 
   // ── Anchor navigation ──
   const userMessages = useMemo(
@@ -740,6 +606,9 @@ export default function NLQueryPage() {
                       fontWeight: 500, fontSize: 14,
                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                     }}>
+                      {streams.some((s) => s.conversationId === conv.id && isActivePhase(s.phase)) && (
+                        <Spin size="small" style={{ marginRight: 6 }} />
+                      )}
                       <MessageOutlined style={{ marginRight: 6, color: '#999' }} />
                       {conv.title || t('chat.newConversation')}
                     </div>
@@ -891,7 +760,7 @@ export default function NLQueryPage() {
           display: 'flex',
           flexDirection: 'column',
         }}>
-          {displayMessages.length === 0 && !querying && !error && (
+          {displayMessages.length === 0 && visibleStreams.length === 0 && (
             <div style={{
               textAlign: 'center', paddingTop: 80, color: '#bbb',
             }}>
@@ -904,17 +773,18 @@ export default function NLQueryPage() {
             </div>
           )}
 
-          {error && (
+          {visibleStreams.filter((s) => s.error).map((s) => (
             <Alert
+              key={`err-${s.uid}`}
               type="error"
               message={t('chat.queryFailed')}
-              description={error}
+              description={s.error}
               showIcon
               closable
               style={{ marginBottom: 16 }}
-              onClose={() => setError(null)}
+              onClose={() => queryStreamManager.dismissError(s.uid)}
             />
-          )}
+          ))}
 
           {/* Anchor navigation */}
           {userMessages.length >= 2 && (
@@ -1044,9 +914,9 @@ export default function NLQueryPage() {
             </div>
           ))}
 
-          {/* Streaming response (in-progress) */}
-          {(streamingBlocks.length > 0 || streamingThink || querying) && (
-            <div style={{ marginBottom: 20 }}>
+          {/* Streaming responses (kept alive across page & conversation switches) */}
+          {visibleStreams.map((s) => (
+            <div key={s.uid} style={{ marginBottom: 20 }}>
               {/* User question bubble for streaming */}
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
                 <div style={{
@@ -1056,13 +926,14 @@ export default function NLQueryPage() {
                   padding: '10px 16px',
                   fontSize: 14,
                   lineHeight: 1.6,
+                  whiteSpace: 'pre-wrap',
                 }}>
-                  {question}
+                  {s.question}
                 </div>
               </div>
               {/* DB scope tags for the streaming question */}
               <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', justifyContent: 'flex-end', marginBottom: 8 }}>
-                {dbScopeTags.map((tag) => (
+                {s.scopeTags.map((tag) => (
                   <Tag key={tag.key} color="cyan" style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>{tag.text}</Tag>
                 ))}
               </div>
@@ -1078,13 +949,13 @@ export default function NLQueryPage() {
                   overflowX: 'auto',
                   minWidth: 0,
                 }}>
-                  {streamingBlocks.map((block) => (
+                  {s.blocks.map((block) => (
                     <MemoBlockView key={block.key} block={block} />
                   ))}
 
-                  {streamingThinkNode}
+                  {renderThinkNode(s.think)}
 
-                  {querying && streamingBlocks.length === 0 && !streamingThink && (
+                  {isActivePhase(s.phase) && s.blocks.length === 0 && !s.think && (
                     <div style={{ textAlign: 'center', padding: 16 }}>
                       <Spin />
                       <div style={{ marginTop: 8 }}>
@@ -1093,24 +964,30 @@ export default function NLQueryPage() {
                     </div>
                   )}
 
-                  {llmTime && (
-                    <Tag color="blue" style={{ marginTop: 4 }}>{t('chat.llmTime', { time: llmTime })}</Tag>
+                  {s.phase === 'stopped' && (
+                    <Tag color="orange" style={{ marginTop: 4 }}>{t('chat.streamStopped')}</Tag>
+                  )}
+                  {!isActivePhase(s.phase) && s.phase !== 'done' && s.phase !== 'stopped' && s.blocks.length > 0 && (
+                    <Tag color="orange" style={{ marginTop: 4 }}>{t('chat.streamPartial')}</Tag>
+                  )}
+
+                  {s.llmTimeMs && (
+                    <Tag color="blue" style={{ marginTop: 4 }}>{t('chat.llmTime', { time: s.llmTimeMs })}</Tag>
                   )}
                 </div>
               </div>
             </div>
-          )}
+          ))}
 
           <div ref={chatEndRef} />
         </div>
 
         {/* Status Bar */}
-        {querying && streamPhase !== 'idle' && (() => {
+        {runningStream && (() => {
           const phaseLabel =
-            streamPhase === 'connecting' ? t('block.phaseConnecting') :
-            streamPhase === 'thinking' ? t('block.phaseThinking') :
-            streamPhase === 'executing' ? t('block.phaseExecuting') :
-            streamPhase === 'error' ? t('chat.queryFailed') :
+            runningStream.phase === 'connecting' ? t('block.phaseConnecting') :
+            runningStream.phase === 'thinking' ? t('block.phaseThinking') :
+            runningStream.phase === 'executing' ? t('block.phaseExecuting') :
             t('block.thinking');
           return (
             <div style={{
@@ -1124,9 +1001,9 @@ export default function NLQueryPage() {
               <Text style={{ fontSize: 13, color: '#52c41a', fontWeight: 500 }}>
                 {phaseLabel}
               </Text>
-              {elapsedSeconds > 0 && (
+              {runningStream.elapsed > 0 && (
                 <Text type="secondary" style={{ fontSize: 12, marginLeft: 'auto' }}>
-                  {t('chat.elapsed', { time: elapsedSeconds.toFixed(1) })}
+                  {t('chat.elapsed', { time: runningStream.elapsed.toFixed(1) })}
                 </Text>
               )}
             </div>

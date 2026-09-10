@@ -33,6 +33,13 @@ export async function executeNLQuery(req: NLQueryRequest): Promise<NLQueryRespon
 /**
  * Execute NL query with SSE streaming (Agent mode).
  * Returns an abort function to cancel the stream.
+ *
+ * Robustness rules:
+ * - If the stream ends BEFORE a `done` event arrives (proxy timeout, backend
+ *   restart, network drop), this is reported via onError instead of failing
+ *   silently.
+ * - An inactivity watchdog aborts the request when no bytes arrive for
+ *   INACTIVITY_TIMEOUT_MS, so a dead connection cannot hang the UI forever.
  */
 export function executeNLQueryStream(
   req: NLQueryRequest,
@@ -42,10 +49,40 @@ export function executeNLQueryStream(
 ): AbortController {
   const controller = new AbortController();
 
+  const INACTIVITY_TIMEOUT_MS = 240_000; // server gaps stay under ~120s (httpx read timeout + SQL timeout)
+
   const isElectron = typeof window !== 'undefined' && window.__ELECTRON__ === true;
   const url = isElectron
     ? 'http://localhost:8000/api/v1/nl-query-stream'
     : '/api/v1/nl-query-stream';
+
+  let sawDone = false;
+  let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  let reportedError = false;
+
+  const reportError = (msg: string) => {
+    if (reportedError) return;
+    reportedError = true;
+    onError(msg);
+  };
+
+  const clearWatchdog = () => {
+    if (watchdogTimer) {
+      clearTimeout(watchdogTimer);
+      watchdogTimer = null;
+    }
+  };
+
+  const resetWatchdog = () => {
+    clearWatchdog();
+    watchdogTimer = setTimeout(() => {
+      controller.abort();
+      reportError(
+        `连接空闲超过 ${Math.round(INACTIVITY_TIMEOUT_MS / 1000)} 秒无数据，已中断，请重试` +
+        ` (no data for ${Math.round(INACTIVITY_TIMEOUT_MS / 1000)}s, connection aborted)`,
+      );
+    }, INACTIVITY_TIMEOUT_MS);
+  };
 
   fetch(url, {
     method: 'POST',
@@ -56,23 +93,25 @@ export function executeNLQueryStream(
     .then(async (response) => {
       if (!response.ok) {
         const text = await response.text();
-        onError(`HTTP ${response.status}: ${text}`);
+        reportError(`HTTP ${response.status}: ${text}`);
         onDone();
         return;
       }
 
       const reader = response.body?.getReader();
       if (!reader) {
-        onError('Unable to read response stream');
+        reportError('Unable to read response stream');
         onDone();
         return;
       }
 
       const decoder = new TextDecoder();
       let buffer = '';
+      resetWatchdog();
 
       while (true) {
         const { done, value } = await reader.read();
+        resetWatchdog(); // any bytes from the server prove the connection is alive
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
@@ -88,6 +127,8 @@ export function executeNLQueryStream(
                 const event: SSEEvent = JSON.parse(line.slice(6));
                 onEvent(event);
                 if (event.type === 'done') {
+                  sawDone = true;
+                  clearWatchdog();
                   reader.cancel();
                   onDone();
                   return;
@@ -100,12 +141,22 @@ export function executeNLQueryStream(
         }
       }
 
+      // Stream closed before the `done` event — the query did NOT finish.
+      clearWatchdog();
+      if (!sawDone) {
+        reportError(
+          '连接在查询完成前中断，未收到完成事件，结果可能不完整' +
+          ' (connection closed before the query finished)',
+        );
+      }
       onDone();
     })
     .catch((err: Error) => {
+      clearWatchdog();
       if (err.name !== 'AbortError') {
-        onError(err.message || 'Network error');
+        reportError(err.message || 'Network error');
       }
+      // Manual stop or watchdog abort: watchdog already reported its own error.
       onDone();
     });
 

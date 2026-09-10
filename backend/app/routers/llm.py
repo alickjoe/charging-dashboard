@@ -1,5 +1,6 @@
 """API routes for LLM configuration management and natural language queries."""
 
+import asyncio
 import json
 import time
 import logging
@@ -24,6 +25,9 @@ from app.services.llm_agent_service import run_agent_stream
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["llm"])
+
+# Strong references so fire-and-forget partial-save tasks are not garbage collected
+_BACKGROUND_SAVES: set[asyncio.Task] = set()
 
 
 def _row_to_response(row: dict) -> LLMConfigResponse:
@@ -239,8 +243,88 @@ async def nl_query_stream(body: NLQueryRequest, request: Request):
         final_conversation_messages = None
         done_sse_str: str | None = None
         gen_started = time.monotonic()
+        # Guards against double-persisting this exchange when a client
+        # disconnect lands exactly while the normal persist is running.
+        persist_state = {"normal_started": False, "normal_done": False}
+
+        async def persist_exchange(partial: bool, note: str | None = None) -> None:
+            """Persist the user question + assistant blocks for this exchange.
+
+            ``partial=True`` is used when the stream ended abnormally (client
+            disconnect, internal error): whatever streamed so far is kept so
+            the user can continue the conversation from that point. Raw
+            messages are intentionally left empty in that case — a
+            half-finished tool-call sequence must never leak into the next
+            request's LLM context.
+            """
+            raw_msgs_json = "[]" if partial else json.dumps(final_conversation_messages or [], ensure_ascii=False)
+            blocks = list(collected_blocks)
+            if note:
+                blocks.append({"type": "error", "content": note})
+            blocks_json = json.dumps(blocks, ensure_ascii=False)
+            skill_ids_json = json.dumps(body.skill_ids) if body.skill_ids else '[]'
+
+            current_conv = await ConversationStore.get_by_id(conversation_id)
+            if current_conv and not current_conv.get("title"):
+                title = body.question[:30] if len(body.question) > 30 else body.question
+                await ConversationStore.update_title(conversation_id, title)
+
+            await ConversationStore.add_message(
+                conversation_id=conversation_id,
+                role="user",
+                question=body.question,
+                answer_blocks="[]",
+                llm_time_ms=None,
+                raw_messages=raw_msgs_json,
+                skill_ids=skill_ids_json,
+            )
+            await ConversationStore.add_message(
+                conversation_id=conversation_id,
+                role="assistant",
+                question="",
+                answer_blocks=blocks_json,
+                llm_time_ms=None if partial else final_llm_time,
+                raw_messages=raw_msgs_json,
+                skill_ids=skill_ids_json,
+            )
+
+        def schedule_partial_save(reason: str) -> None:
+            """Persist what streamed so far after an abnormal stream end.
+
+            Runs as a detached task because awaiting inside a cancelled or
+            closing async generator is not allowed. Skipped when the normal
+            persist already started (the exchange is being written anyway and
+            writing it twice would duplicate rows).
+            """
+            if persist_state["normal_started"]:
+                logger.info(
+                    "[cid=%s] stage=partial_persist skipped (normal persist already started)", correlation_id,
+                )
+                return
+
+            async def _save():
+                try:
+                    await persist_exchange(
+                        partial=True,
+                        note=f"⚠️ {reason}，以上为部分结果；可继续提问接着分析。",
+                    )
+                    logger.info(
+                        "[cid=%s] stage=partial_persist saved %d block(s) after abnormal stream end",
+                        correlation_id, len(collected_blocks),
+                    )
+                except Exception:
+                    logger.exception("[cid=%s] stage=partial_persist failed", correlation_id)
+
+            task = asyncio.create_task(_save())
+            _BACKGROUND_SAVES.add(task)
+            task.add_done_callback(_BACKGROUND_SAVES.discard)
 
         try:
+            # Announce the conversation id immediately: the UI can attach the
+            # running stream (and the user can find the conversation in the
+            # sidebar) even if the query later dies or the client leaves.
+            yield f"data: {json.dumps({'type': 'conversation', 'conversation_id': conversation_id}, ensure_ascii=False)}\n\n"
+
             async for sse_str in run_agent_stream(
                 pools=pools,
                 connections=connections,
@@ -294,45 +378,40 @@ async def nl_query_stream(body: NLQueryRequest, request: Request):
                         logger.debug("[cid=%s] skipping malformed SSE event: %s", correlation_id, e)
 
                 yield sse_str
+        except asyncio.CancelledError:
+            # Client disconnected / navigated away mid-stream: save the partial
+            # exchange (detached task), then let cancellation propagate.
+            logger.warning(
+                "[cid=%s] stage=agent_stream client disconnected, duration_ms=%.1f",
+                correlation_id,
+                (time.monotonic() - gen_started) * 1000,
+            )
+            schedule_partial_save("连接中断")
+            raise
+        except GeneratorExit:
+            schedule_partial_save("连接中断")
+            raise
         except Exception:
             logger.exception(
                 "[cid=%s] stage=agent_stream unexpected failure, duration_ms=%.1f",
                 correlation_id,
                 (time.monotonic() - gen_started) * 1000,
             )
+            # Keep whatever streamed before the failure so nothing is lost.
+            try:
+                await persist_exchange(partial=True, note="查询过程中发生内部错误，以上为部分结果")
+            except Exception:
+                logger.exception("[cid=%s] stage=persist partial (internal error) failed", correlation_id)
             yield f"data: {json.dumps({'type': 'error', 'message': '查询过程中发生内部错误，请稍后重试', 'correlation_id': correlation_id}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'done', 'message': ''}, ensure_ascii=False)}\n\n"
             return
 
-        # Update conversation title from first question (if title is still empty)
+        # Persist the finished exchange, then deliver the deferred done event —
+        # the frontend will see messages once it reloads the conversation.
+        persist_state["normal_started"] = True
         try:
-            current_conv = await ConversationStore.get_by_id(conversation_id)
-            if current_conv and not current_conv.get("title"):
-                title = body.question[:30] if len(body.question) > 30 else body.question
-                await ConversationStore.update_title(conversation_id, title)
-
-            raw_msgs_json = json.dumps(final_conversation_messages or [], ensure_ascii=False)
-            blocks_json = json.dumps(collected_blocks, ensure_ascii=False)
-            skill_ids_json = json.dumps(body.skill_ids) if body.skill_ids else '[]'
-
-            await ConversationStore.add_message(
-                conversation_id=conversation_id,
-                role="user",
-                question=body.question,
-                answer_blocks="[]",
-                llm_time_ms=None,
-                raw_messages=raw_msgs_json,
-                skill_ids=skill_ids_json,
-            )
-            await ConversationStore.add_message(
-                conversation_id=conversation_id,
-                role="assistant",
-                question="",
-                answer_blocks=blocks_json,
-                llm_time_ms=final_llm_time,
-                raw_messages=raw_msgs_json,
-                skill_ids=skill_ids_json,
-            )
+            await persist_exchange(partial=False)
+            persist_state["normal_done"] = True
         except Exception:
             logger.exception(
                 "[cid=%s] stage=persist failed, duration_ms=%.1f",
@@ -342,7 +421,7 @@ async def nl_query_stream(body: NLQueryRequest, request: Request):
             yield f"data: {json.dumps({'type': 'error', 'message': '查询结果保存失败，请检查服务日志', 'correlation_id': correlation_id}, ensure_ascii=False)}\n\n"
             return
 
-        # Now yield the done event — frontend will see messages when it reloads
+        # Now yield the done event
         if done_sse_str:
             yield done_sse_str
 
