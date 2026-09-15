@@ -32,6 +32,9 @@ param(
 $ErrorActionPreference = 'Stop'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072 } catch { }
 
+# Normalize: accept both '22.14.0' and 'v22.14.0'
+if ($NodeVersion -notmatch '^v') { $NodeVersion = "v$NodeVersion" }
+
 $nodeDir = Join-Path $env:LOCALAPPDATA 'Programs\aidbquery\node'
 
 function Info($msg)    { Write-Host "[..] $msg" -ForegroundColor Cyan }
@@ -64,9 +67,12 @@ if ($needPortableNode) {
     Ok "Portable Node already present: $nodeDir"
   } else {
     $nodeName = "node-$NodeVersion-win-x64.zip"
+    # Mirrors must include the version directory segment:
+    #   https://nodejs.org/dist/v22.14.0/node-v22.14.0-win-x64.zip
+    # (dist root + bare filename 404s)
     $mirrors = @(
-      "https://nodejs.org/dist/",
-      "https://npmmirror.com/mirrors/node/"
+      "https://nodejs.org/dist/$NodeVersion/",
+      "https://npmmirror.com/mirrors/node/$NodeVersion/"
     )
     $zipFile = Join-Path $env:TEMP $nodeName
     $downloaded = $false
