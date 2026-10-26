@@ -25,7 +25,7 @@
 param(
   [switch]$Launch,
   [switch]$NoShortcuts,
-  [string]$NodeVersion = 'v22.14.0',
+  [string]$NodeVersion = 'v24.22.1',
   [string]$NpmPackage = 'aidbquery'
 )
 
