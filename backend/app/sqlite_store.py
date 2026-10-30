@@ -1,6 +1,7 @@
 """SQLite-based configuration store for database connections and LLM configs."""
 
 import base64
+import json
 import os
 import sqlite3
 import asyncio
@@ -76,6 +77,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     connection_name TEXT NOT NULL,
     llm_config_id   INTEGER NOT NULL,
     connection_schemas TEXT NOT NULL DEFAULT '[]',
+    skill_ids       TEXT NOT NULL DEFAULT '[]',
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -229,6 +231,58 @@ def _get_conn() -> sqlite3.Connection:
     return conn
 
 
+def _parse_skill_ids(raw) -> list[int]:
+    """Parse a JSON column holding a list of skill ids into a clean int list."""
+    if not raw:
+        return []
+    try:
+        val = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(val, list):
+        return []
+    result: list[int] = []
+    for item in val:
+        # bool is a subclass of int — reject it explicitly.
+        if isinstance(item, int) and not isinstance(item, bool) and item not in result:
+            result.append(item)
+    return result
+
+
+def _skill_union(conn: sqlite3.Connection, conversation_id: int) -> list[int]:
+    """Historical union of skill ids across all messages of a conversation."""
+    rows = conn.execute(
+        "SELECT skill_ids FROM conversation_messages WHERE conversation_id = ? AND skill_ids != '[]'",
+        (conversation_id,),
+    ).fetchall()
+    union: set[int] = set()
+    for row in rows:
+        union.update(_parse_skill_ids(row["skill_ids"]))
+    return sorted(union)
+
+
+def _backfill_conversation_skill_ids(conn: sqlite3.Connection) -> None:
+    """One-off migration: bind each existing conversation to its last message's skills.
+
+    Only called on the startup that adds the ``conversations.skill_ids`` column,
+    so a user explicitly clearing a conversation's skills is never resurrected
+    on a later restart.
+    """
+    rows = conn.execute("SELECT id FROM conversations").fetchall()
+    for row in rows:
+        cid = row["id"]
+        latest = conn.execute(
+            "SELECT skill_ids FROM conversation_messages WHERE conversation_id = ? ORDER BY id DESC LIMIT 1",
+            (cid,),
+        ).fetchone()
+        bound = _parse_skill_ids(latest["skill_ids"]) if latest else []
+        conn.execute(
+            "UPDATE conversations SET skill_ids = ? WHERE id = ?",
+            (json.dumps(bound), cid),
+        )
+    conn.commit()
+
+
 async def init_db() -> None:
     """Create tables if they don't exist, and run migrations."""
     def _init():
@@ -250,6 +304,15 @@ async def init_db() -> None:
                 )
             except sqlite3.OperationalError:
                 pass  # Column already exists
+            # Migration: conversation-level skill binding. Only backfill on the
+            # startup that actually adds the column (see helper docstring).
+            try:
+                conn.execute(
+                    "ALTER TABLE conversations ADD COLUMN skill_ids TEXT NOT NULL DEFAULT '[]'"
+                )
+                _backfill_conversation_skill_ids(conn)
+            except sqlite3.OperationalError:
+                pass  # Column already exists — keep user's current binding
             # Migration: WSS tunnel (corporate network mode) columns
             for _stmt in (
                 "ALTER TABLE db_connections ADD COLUMN tunnel_mode INTEGER NOT NULL DEFAULT 0",
@@ -630,13 +693,14 @@ class ConversationStore:
         llm_config_id: int,
         title: str = "",
         connection_schemas: str = '[]',
+        skill_ids: str = '[]',
     ) -> dict:
         def _do():
             conn = _get_conn()
             try:
                 conn.execute(
-                    "INSERT INTO conversations (title, connection_name, llm_config_id, connection_schemas) VALUES (?, ?, ?, ?)",
-                    (title, connection_name, llm_config_id, connection_schemas),
+                    "INSERT INTO conversations (title, connection_name, llm_config_id, connection_schemas, skill_ids) VALUES (?, ?, ?, ?, ?)",
+                    (title, connection_name, llm_config_id, connection_schemas, skill_ids),
                 )
                 conn.commit()
                 row = conn.execute(
@@ -688,9 +752,13 @@ class ConversationStore:
                         except (_json.JSONDecodeError, TypeError):
                             pass
                     for r in results:
+                        # Keep the raw conversation column as the current binding
+                        # before overwriting skill_ids with the historical union.
+                        r["bound_skill_ids"] = _parse_skill_ids(r.get("skill_ids"))
                         r["skill_ids"] = sorted(skill_map.get(r["id"], set()))
                 else:
                     for r in results:
+                        r["bound_skill_ids"] = _parse_skill_ids(r.get("skill_ids"))
                         r["skill_ids"] = []
 
                 return results
@@ -709,6 +777,8 @@ class ConversationStore:
                 if not row:
                     return None
                 result = dict(row)
+                result["bound_skill_ids"] = _parse_skill_ids(result.get("skill_ids"))
+                result["skill_ids"] = _skill_union(conn, conversation_id)
                 result["connection_schemas"] = ConversationStore._parse_connection_schemas(
                     result.get("connection_schemas")
                 )
@@ -749,6 +819,59 @@ class ConversationStore:
                     "SELECT * FROM conversations WHERE id = ?", (conversation_id,)
                 ).fetchone()
                 return dict(row) if row else None
+            finally:
+                conn.close()
+        return await asyncio.to_thread(_do)
+
+    @staticmethod
+    async def update_skill_ids(conversation_id: int, skill_ids: str) -> Optional[dict]:
+        """Set the conversation-level skill binding (does not touch updated_at)."""
+        def _do():
+            conn = _get_conn()
+            try:
+                cur = conn.execute(
+                    "UPDATE conversations SET skill_ids = ? WHERE id = ?",
+                    (skill_ids, conversation_id),
+                )
+                conn.commit()
+                if cur.rowcount <= 0:
+                    return None
+                row = conn.execute(
+                    "SELECT * FROM conversations WHERE id = ?", (conversation_id,)
+                ).fetchone()
+                if not row:
+                    return None
+                result = dict(row)
+                result["bound_skill_ids"] = _parse_skill_ids(result.get("skill_ids"))
+                return result
+            finally:
+                conn.close()
+        return await asyncio.to_thread(_do)
+
+    @staticmethod
+    async def remove_skill_id_everywhere(skill_id: int) -> int:
+        """Drop a deleted skill id from every conversation's binding.
+
+        Historical ``conversation_messages.skill_ids`` rows are left untouched
+        (they are an audit record of what each request actually used).
+        """
+        def _do():
+            conn = _get_conn()
+            try:
+                rows = conn.execute("SELECT id, skill_ids FROM conversations").fetchall()
+                changed = 0
+                for row in rows:
+                    ids = _parse_skill_ids(row["skill_ids"])
+                    if skill_id not in ids:
+                        continue
+                    ids = [i for i in ids if i != skill_id]
+                    conn.execute(
+                        "UPDATE conversations SET skill_ids = ? WHERE id = ?",
+                        (json.dumps(ids), row["id"]),
+                    )
+                    changed += 1
+                conn.commit()
+                return changed
             finally:
                 conn.close()
         return await asyncio.to_thread(_do)

@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, memo, useMemo, useSyncExternalStore } from
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Select, Input, Button, Card, Space, Spin, Alert, Typography,
-  Tag, Popconfirm, Empty,
+  Tag, Popconfirm, Empty, Tooltip,
 } from 'antd';
 import {
   SendOutlined, StopOutlined, BarChartOutlined,
@@ -13,7 +13,7 @@ import {
 import { fetchConnections } from '../api/connections';
 import { fetchSchemas } from '../api/databases';
 import { fetchLLMConfigs } from '../api/llm';
-import { fetchConversations, fetchConversationDetail, deleteConversation } from '../api/conversations';
+import { fetchConversations, fetchConversationDetail, deleteConversation, updateConversationSkills } from '../api/conversations';
 import { fetchSkills } from '../api/skills';
 import { queryStreamManager, isActivePhase } from '../services/queryStreamManager';
 import type { QueryStream, StreamBlock, StreamBlockType } from '../services/queryStreamManager';
@@ -229,6 +229,66 @@ export default function NLQueryPage() {
   const [selectedSkillIds, setSelectedSkillIds] = useState<number[]>([]);
   const [showSkillPicker, setShowSkillPicker] = useState(false);
   const [slashFilter, setSlashFilter] = useState('');
+  // Conversation-level skill binding is persisted server-side. These refs keep
+  // the async restore/save paths from clobbering a change the user just made.
+  const skillsDirtyRef = useRef(false);
+  const skillsSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSavedSkillsRef = useRef<number[]>([]);
+  const lastSavedConvIdRef = useRef<number | null>(null);
+  const activeConvIdRef = useRef<number | null>(null);
+  const selectedSkillIdsRef = useRef<number[]>([]);
+
+  useEffect(() => {
+    activeConvIdRef.current = activeConvId;
+  }, [activeConvId]);
+
+  useEffect(() => {
+    selectedSkillIdsRef.current = selectedSkillIds;
+  }, [selectedSkillIds]);
+
+  /** Persist the active conversation's skill binding (debounced, latest wins). */
+  const persistConversationSkills = (convId: number, ids: number[]) => {
+    if (skillsSaveTimerRef.current) clearTimeout(skillsSaveTimerRef.current);
+    skillsSaveTimerRef.current = setTimeout(() => {
+      skillsSaveTimerRef.current = null;
+      updateConversationSkills(convId, ids)
+        .then((res) => {
+          lastSavedSkillsRef.current = res.bound_skill_ids;
+          lastSavedConvIdRef.current = convId;
+          queryClient.invalidateQueries({ queryKey: ['conversations'] });
+        })
+        .catch(() => {
+          // Roll back to the last server-confirmed binding, but only while the
+          // user is still looking at the same conversation.
+          if (lastSavedConvIdRef.current === convId && activeConvIdRef.current === convId) {
+            setSelectedSkillIds(lastSavedSkillsRef.current);
+          }
+          toast.error(t('chat.errSaveSkills'));
+        });
+    }, 300);
+  };
+
+  /** Single entry point for user-driven skill changes (add / remove / clear). */
+  const applySkillSelection = (nextIds: number[]) => {
+    setSelectedSkillIds(nextIds);
+    skillsDirtyRef.current = true;
+    const convId = activeConvIdRef.current;
+    if (convId !== null) {
+      persistConversationSkills(convId, nextIds);
+    }
+  };
+
+  // Flush a pending save when leaving the page (fire-and-forget).
+  useEffect(() => () => {
+    if (skillsSaveTimerRef.current) {
+      clearTimeout(skillsSaveTimerRef.current);
+      skillsSaveTimerRef.current = null;
+      const convId = activeConvIdRef.current;
+      if (convId !== null) {
+        updateConversationSkills(convId, selectedSkillIdsRef.current).catch(() => {});
+      }
+    }
+  }, []);
 
   // Sidebar toggle for responsive layout
   const [sidebarVisible, setSidebarVisible] = useState(window.innerWidth >= 768);
@@ -299,9 +359,18 @@ export default function NLQueryPage() {
         connection_schemas: detail.connection_schemas || [],
         message_count: loaded.length,
         skill_ids: detail.skill_ids || [],
+        bound_skill_ids: detail.bound_skill_ids || [],
         created_at: detail.created_at,
         updated_at: detail.updated_at,
       });
+      // Restore the conversation's bound skills unless the user already
+      // changed the selection for this conversation.
+      if (!skillsDirtyRef.current) {
+        const bound = detail.bound_skill_ids || [];
+        setSelectedSkillIds(bound);
+        lastSavedSkillsRef.current = bound;
+        lastSavedConvIdRef.current = detail.id;
+      }
       // Persisted history now carries the exchange content — drop finished
       // streams for this conversation so nothing renders twice. Running
       // streams are kept so a live query keeps streaming.
@@ -313,6 +382,21 @@ export default function NLQueryPage() {
     });
     return () => { cancelled = true; };
   }, [activeConvId]);
+
+  // Drop ids of skills that no longer exist (e.g. deleted on the Skills page)
+  // from the current selection and persist the cleanup.
+  useEffect(() => {
+    if (!skills || skills.length === 0 || selectedSkillIds.length === 0) return;
+    const known = new Set(skills.map((s) => s.id));
+    const cleaned = selectedSkillIds.filter((id) => known.has(id));
+    if (cleaned.length !== selectedSkillIds.length) {
+      setSelectedSkillIds(cleaned);
+      skillsDirtyRef.current = true;
+      const convId = activeConvIdRef.current;
+      if (convId !== null) persistConversationSkills(convId, cleaned);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [skills, selectedSkillIds]);
 
   // ── Auto-scroll ──
   useEffect(() => {
@@ -351,6 +435,11 @@ export default function NLQueryPage() {
       ) {
         jumpedToConvRef.current.add(s.uid);
         setActiveConvId(s.conversationId);
+        // If the user changed skills while this (new) conversation was still
+        // being created, persist that choice now that the id is known.
+        if (skillsDirtyRef.current) {
+          persistConversationSkills(s.conversationId, selectedSkillIdsRef.current);
+        }
         break;
       }
     }
@@ -390,13 +479,22 @@ export default function NLQueryPage() {
       return;
     }
 
+    // Flush a pending binding save so the message and the stored binding agree.
+    if (skillsSaveTimerRef.current) {
+      clearTimeout(skillsSaveTimerRef.current);
+      skillsSaveTimerRef.current = null;
+      if (activeConvId !== null) {
+        updateConversationSkills(activeConvId, selectedSkillIds).catch(() => {});
+      }
+    }
+
     queryStreamManager.start({
       connectionName: conn,
       connectionSchemas: connSelections,
       llmConfigId: llmId,
       question: effectiveQuestion,
       language: language,
-      skillIds: selectedSkillIds.length > 0 ? selectedSkillIds : undefined,
+      skillIds: selectedSkillIds,
       conversationId: activeConvId ?? undefined,
       viewConversationId: activeConvId,
       scopeTags: dbScopeTags,
@@ -431,22 +529,58 @@ export default function NLQueryPage() {
     setSelectedSkillIds([]);
     setShowSkillPicker(false);
     setSlashFilter('');
+    if (skillsSaveTimerRef.current) {
+      clearTimeout(skillsSaveTimerRef.current);
+      skillsSaveTimerRef.current = null;
+      const prevConvId = activeConvIdRef.current;
+      if (prevConvId !== null) {
+        updateConversationSkills(prevConvId, selectedSkillIdsRef.current).catch(() => {});
+      }
+    }
+    skillsDirtyRef.current = false;
+    lastSavedSkillsRef.current = [];
+    lastSavedConvIdRef.current = null;
   };
 
   const handleSelectConv = (conv: Conversation) => {
     // NOTE: no abort here — a running query keeps running and stays attached
     // to its conversation; switching views never interrupts it.
+    // Re-clicking the active conversation: keep the current editing state.
+    if (activeConvIdRef.current === conv.id) return;
+    // Flush a pending save for the conversation we are leaving first.
+    if (skillsSaveTimerRef.current) {
+      clearTimeout(skillsSaveTimerRef.current);
+      skillsSaveTimerRef.current = null;
+      const prevConvId = activeConvIdRef.current;
+      if (prevConvId !== null) {
+        updateConversationSkills(prevConvId, selectedSkillIdsRef.current).catch(() => {});
+      }
+    }
     setActiveConvId(conv.id);
     setMessages([]);
     setQuestion('');
+    // Replace (never carry over) the previous conversation's skill binding.
+    const bound = conv.bound_skill_ids || [];
+    setSelectedSkillIds(bound);
+    skillsDirtyRef.current = false;
+    lastSavedSkillsRef.current = bound;
+    lastSavedConvIdRef.current = conv.id;
   };
 
   const handleDeleteConv = async (id: number) => {
     await deleteConversation(id);
     if (activeConvId === id) {
+      if (skillsSaveTimerRef.current) {
+        clearTimeout(skillsSaveTimerRef.current);
+        skillsSaveTimerRef.current = null;
+      }
       setActiveConvId(null);
       setActiveConvMeta(null);
       setMessages([]);
+      setSelectedSkillIds([]);
+      skillsDirtyRef.current = false;
+      lastSavedSkillsRef.current = [];
+      lastSavedConvIdRef.current = null;
     }
     // Drop any finished streams attached to the deleted conversation
     queryStreamManager.clearFinishedForConv(id);
@@ -616,22 +750,24 @@ export default function NLQueryPage() {
                       {convDbText(conv)} · {t('chat.messages', { count: conv.message_count })} · {fmtTime(conv.updated_at)}
                     </div>
                     {conv.skill_ids && conv.skill_ids.length > 0 && (
-                      <div style={{ marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 3 }}>
-                        {conv.skill_ids.slice(0, 3).map((sid) => {
-                          const skillName = (skills || []).find((s) => s.id === sid)?.name;
-                          if (!skillName) return null;
-                          return (
-                            <Tag key={sid} color="purple" style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>
-                              {skillName}
+                      <Tooltip title={t('chat.skillsHistoryTooltip')} placement="bottom">
+                        <div style={{ marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                          {conv.skill_ids.slice(0, 3).map((sid) => {
+                            const skillName = (skills || []).find((s) => s.id === sid)?.name;
+                            if (!skillName) return null;
+                            return (
+                              <Tag key={sid} color="purple" style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>
+                                {skillName}
+                              </Tag>
+                            );
+                          })}
+                          {conv.skill_ids.length > 3 && (
+                            <Tag color="purple" style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>
+                              +{conv.skill_ids.length - 3}
                             </Tag>
-                          );
-                        })}
-                        {conv.skill_ids.length > 3 && (
-                          <Tag color="purple" style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>
-                            +{conv.skill_ids.length - 3}
-                          </Tag>
-                        )}
-                      </div>
+                          )}
+                        </div>
+                      </Tooltip>
                     )}
                   </div>
                   <Popconfirm
@@ -1022,7 +1158,7 @@ export default function NLQueryPage() {
                 <Tag
                   key={skill.id}
                   closable
-                  onClose={() => setSelectedSkillIds(prev => prev.filter(id => id !== skill.id))}
+                  onClose={() => applySkillSelection(selectedSkillIds.filter(id => id !== skill.id))}
                   color="purple"
                 >
                   /{skill.name}
@@ -1053,7 +1189,7 @@ export default function NLQueryPage() {
                   <div
                     key={skill.id}
                     onClick={() => {
-                      setSelectedSkillIds(prev => [...prev, skill.id]);
+                      applySkillSelection([...selectedSkillIds, skill.id]);
                       setShowSkillPicker(false);
                       setSlashFilter('');
                     }}

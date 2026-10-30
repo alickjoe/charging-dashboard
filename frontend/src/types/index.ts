@@ -199,6 +199,7 @@ export interface Conversation {
   connection_schemas: ConnectionSchemaSelection[];
   message_count: number;
   skill_ids: number[];
+  bound_skill_ids: number[];
   created_at: string;
   updated_at: string;
 }

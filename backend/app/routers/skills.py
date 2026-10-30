@@ -12,7 +12,7 @@ from app.schemas.skill import (
     EnhancePromptRequest,
     EnhancePromptResponse,
 )
-from app.sqlite_store import SkillStore, LLMConfigStore
+from app.sqlite_store import SkillStore, LLMConfigStore, ConversationStore
 
 logger = logging.getLogger(__name__)
 
@@ -87,10 +87,11 @@ async def update_skill(skill_id: int, body: SkillUpdate):
 
 @router.delete("/{skill_id}", status_code=204)
 async def delete_skill(skill_id: int):
-    """Delete a skill."""
+    """Delete a skill and unbind it from every conversation."""
     deleted = await SkillStore.delete(skill_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Skill ID={skill_id} 不存在")
+    await ConversationStore.remove_skill_id_everywhere(skill_id)
 
 
 # ─── Prompt Enhancement ────────────────────────────────────────────

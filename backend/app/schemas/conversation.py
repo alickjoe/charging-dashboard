@@ -30,7 +30,8 @@ class ConversationResponse(BaseModel):
     llm_config_id: int
     connection_schemas: list[dict] = []  # [{connection_name, schemas}] JSON from column
     message_count: int = 0
-    skill_ids: list[int] = []  # Deduplicated skill IDs used in this conversation
+    skill_ids: list[int] = []  # Historical union of skill IDs used in this conversation
+    bound_skill_ids: list[int] = []  # Skills currently bound to this conversation
     created_at: str
     updated_at: str
 
@@ -41,6 +42,17 @@ class ConversationDetailResponse(BaseModel):
     connection_name: str
     llm_config_id: int
     connection_schemas: list[dict] = []  # [{connection_name, schemas}] JSON from column
+    skill_ids: list[int] = []  # Historical union of skill IDs used in this conversation
+    bound_skill_ids: list[int] = []  # Skills currently bound to this conversation
     created_at: str
     updated_at: str
     messages: list[MessageResponse] = []
+
+
+class UpdateConversationSkillsRequest(BaseModel):
+    skill_ids: list[int] = []
+
+
+class ConversationSkillsResponse(BaseModel):
+    id: int
+    bound_skill_ids: list[int] = []

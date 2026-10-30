@@ -25,3 +25,14 @@ export async function createConversation(
 export async function deleteConversation(id: number): Promise<void> {
   await api.delete(`/conversations/${id}`);
 }
+
+export async function updateConversationSkills(
+  id: number,
+  skillIds: number[],
+): Promise<{ id: number; bound_skill_ids: number[] }> {
+  const { data } = await api.put<{ id: number; bound_skill_ids: number[] }>(
+    `/conversations/${id}/skill-ids`,
+    { skill_ids: skillIds },
+  );
+  return data;
+}

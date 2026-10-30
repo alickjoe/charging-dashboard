@@ -200,11 +200,33 @@ async def nl_query_stream(body: NLQueryRequest, request: Request):
 
     connections = _resolve_connections(body)
 
-    # Load skill prompts if skill_ids provided
+    # Load history messages if continuing a conversation
+    history_messages = []
+    conversation_id = body.conversation_id
+    conv = None
+    if conversation_id:
+        conv = await ConversationStore.get_by_id(conversation_id)
+        if not conv:
+            raise HTTPException(status_code=404, detail=f"会话 ID={conversation_id} 不存在")
+        history_messages = await ConversationStore.get_latest_raw_messages(conversation_id)
+
+    # Resolve the skills that apply to THIS request. An explicit list always
+    # wins (empty list = explicitly no skills); only when the field is omitted
+    # do we fall back to the conversation's bound skills.
+    effective_skill_ids: list[int] = []
+    if body.skill_ids is not None:
+        for sid in body.skill_ids:
+            if sid not in effective_skill_ids:
+                effective_skill_ids.append(sid)
+    elif conv is not None:
+        effective_skill_ids = list(conv.get("bound_skill_ids") or [])
+    logger.info("[cid=%s] effective skill_ids=%s", correlation_id, effective_skill_ids)
+
+    # Load skill prompts for the effective skills
     skill_prompts: list[str] | None = None
-    if body.skill_ids:
-        skill_rows = await SkillStore.get_by_ids(body.skill_ids)
-        logger.info("[cid=%s] NL query with skill_ids=%s, loaded %d skill(s)", correlation_id, body.skill_ids, len(skill_rows))
+    if effective_skill_ids:
+        skill_rows = await SkillStore.get_by_ids(effective_skill_ids)
+        logger.info("[cid=%s] NL query with skill_ids=%s, loaded %d skill(s)", correlation_id, effective_skill_ids, len(skill_rows))
         prompt_parts: list[str] = []
         for s in skill_rows:
             sp = s.get("system_prompt", "").strip()
@@ -219,21 +241,14 @@ async def nl_query_stream(body: NLQueryRequest, request: Request):
             logger.warning("[cid=%s]   No prompt content found in selected skills (both system_prompt and user_prompt_template are empty)!", correlation_id)
         skill_prompts = prompt_parts if prompt_parts else None
 
-    # Load history messages if continuing a conversation
-    history_messages = []
-    conversation_id = body.conversation_id
-    if conversation_id:
-        conv = await ConversationStore.get_by_id(conversation_id)
-        if not conv:
-            raise HTTPException(status_code=404, detail=f"会话 ID={conversation_id} 不存在")
-        history_messages = await ConversationStore.get_latest_raw_messages(conversation_id)
-    else:
+    if conversation_id is None:
         # Pre-create conversation so we can return its ID in the done event
         conv = await ConversationStore.create(
             connection_name=connections[0]["connection_name"],
             llm_config_id=body.llm_config_id,
             title="",
             connection_schemas=json.dumps(connections, ensure_ascii=False),
+            skill_ids=json.dumps(effective_skill_ids),
         )
         conversation_id = conv["id"]
 
@@ -262,7 +277,7 @@ async def nl_query_stream(body: NLQueryRequest, request: Request):
             if note:
                 blocks.append({"type": "error", "content": note})
             blocks_json = json.dumps(blocks, ensure_ascii=False)
-            skill_ids_json = json.dumps(body.skill_ids) if body.skill_ids else '[]'
+            skill_ids_json = json.dumps(effective_skill_ids)
 
             current_conv = await ConversationStore.get_by_id(conversation_id)
             if current_conv and not current_conv.get("title"):
@@ -287,6 +302,9 @@ async def nl_query_stream(body: NLQueryRequest, request: Request):
                 raw_messages=raw_msgs_json,
                 skill_ids=skill_ids_json,
             )
+            # Keep the conversation binding in sync with what this request
+            # actually used (backstop for a failed/omitted frontend PATCH).
+            await ConversationStore.update_skill_ids(conversation_id, skill_ids_json)
 
         def schedule_partial_save(reason: str) -> None:
             """Persist what streamed so far after an abnormal stream end.
