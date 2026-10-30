@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { Link, useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Select,
@@ -224,7 +224,7 @@ export default function DatabaseExplorerPage() {
     <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
       <Breadcrumb
         items={[
-          { title: <a href="/connections">{t('breadcrumb.connections')}</a> },
+          { title: <Link to="/connections">{t('breadcrumb.connections')}</Link> },
           { title: connectionName },
         ]}
         style={{ marginBottom: 16 }}

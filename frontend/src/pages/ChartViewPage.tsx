@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
   Select,
@@ -92,10 +92,10 @@ export default function ChartViewPage() {
     <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
       <Breadcrumb
         items={[
-          { title: <a href="/connections">{t('breadcrumb.connections')}</a> },
+          { title: <Link to="/connections">{t('breadcrumb.connections')}</Link> },
           {
             title: (
-              <a href={`/databases/${connectionName}`}>{connectionName}</a>
+              <Link to={`/databases/${connectionName}`}>{connectionName}</Link>
             ),
           },
           { title: t('chart.breadcrumbChart', { table: tableName }) },

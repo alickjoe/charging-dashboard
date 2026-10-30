@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { Link, useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Card,
@@ -284,10 +284,10 @@ export default function CustomQueryPage() {
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <Breadcrumb
         items={[
-          { title: <a href="/connections">{t('breadcrumb.connections')}</a> },
+          { title: <Link to="/connections">{t('breadcrumb.connections')}</Link> },
           {
             title: (
-              <a href={`/databases/${connectionName}`}>{connectionName}</a>
+              <Link to={`/databases/${connectionName}`}>{connectionName}</Link>
             ),
           },
           { title: t('customQuery.title') },

@@ -122,7 +122,36 @@ function createWindow() {
   setupCORS();
 
   const { frontendDist } = runtimeMod.vendorDirs();
-  win.loadFile(path.join(frontendDist, 'index.html'));
+  const indexPath = path.join(frontendDist, 'index.html');
+
+  // The SPA is loaded from file:// and routed with HashRouter. A plain
+  // <a href="/..."> resolves to a drive-root file URL (file:///C:/...) and
+  // destroys the renderer, leaving a blank white window that only a restart
+  // can recover from. Block any main-frame navigation leaving the bundled
+  // page; in-app routing happens in the hash and is unaffected.
+  win.webContents.on('will-navigate', (event, url) => {
+    const current = win.webContents.getURL().split('#')[0];
+    if (url.split('#')[0] !== current) {
+      event.preventDefault();
+      loggers.frontend('electron', `Blocked main-frame navigation to ${url}`);
+    }
+  });
+
+  // Safety net: if the main frame ever fails to load (which would leave a
+  // permanent white window), reload the bundled SPA once instead of leaving
+  // the app unusable until a manual restart.
+  let recoveryAttempted = false;
+  win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (!isMainFrame || errorCode === -3 || recoveryAttempted) return; // -3 = ERR_ABORTED
+    recoveryAttempted = true;
+    loggers.frontend('electron', `Load failed (${errorCode} ${errorDescription}) for ${validatedURL}; reloading SPA`);
+    win.loadFile(indexPath);
+  });
+  win.webContents.on('did-finish-load', () => {
+    recoveryAttempted = false;
+  });
+
+  win.loadFile(indexPath);
 
   win.on('closed', () => {
     win = null;
