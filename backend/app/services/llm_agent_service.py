@@ -8,6 +8,10 @@ from typing import AsyncGenerator
 import httpx
 
 from app.database import get_pool
+from app.services.ai_query_settings import (
+    AI_QUERY_SETTINGS_DEFAULTS,
+    load_ai_query_settings,
+)
 from app.services.db_explorer_service import list_schemas, list_tables, list_columns
 from app.services.sql_validator import validate_readonly_sql
 from app.sqlite_store import AnnotationStore, ConnectionStore
@@ -44,7 +48,7 @@ You have one tool: `query_database`. Use it to run SELECT queries against one of
 5. After seeing query results, analyze them and explain your findings in plain language.
 6. If a query fails, try to fix it based on the error message.
 7. Use markdown formatting for readability.
-8. Max 5 query rounds.
+8. You may use up to {max_rounds} tool-call rounds (one round = one assistant turn that calls query_database). Use as few queries as possible and stop as soon as you have enough data to answer.
 9. REMINDER: All output must be in {language}. This is non-negotiable.
 
 ## Database Schema
@@ -73,7 +77,7 @@ TOOL_DEFINITION = {
     },
 }
 
-MAX_ROUNDS = 100
+DEFAULT_MAX_TOKENS = 4096
 
 
 async def _get_schema_text(
@@ -189,6 +193,43 @@ def _cid(correlation_id: str | None) -> str:
     return correlation_id or "-"
 
 
+def _trim_history(messages: list[dict], limit: int) -> list[dict]:
+    """Bound the conversation window sent to the LLM.
+
+    Keeps the leading system message(s) and the last ``limit`` messages, then
+    advances the cut point to the first clean ``user`` message: a window that
+    starts in the middle of a tool-call sequence (an assistant ``tool_calls``
+    message without its ``tool`` replies, or a ``tool`` reply without its call)
+    is rejected by the provider. ``limit <= 0`` disables trimming.
+    """
+    if limit <= 0 or len(messages) <= limit + 2:
+        return messages
+
+    system_msgs: list[dict] = []
+    rest = list(messages)
+    while rest and rest[0].get("role") == "system":
+        system_msgs.append(rest.pop(0))
+    if not rest:
+        return messages
+
+    start = max(0, len(rest) - limit)
+    while start < len(rest) - 1:
+        msg = rest[start]
+        prev = rest[start - 1] if start > 0 else None
+        prev_is_open_tool_call = bool(
+            prev and prev.get("role") == "assistant" and prev.get("tool_calls")
+        )
+        if msg.get("role") == "user" and not prev_is_open_tool_call:
+            break
+        start += 1
+
+    kept = rest[start:]
+    # Orphaned tool replies whose assistant call was trimmed away.
+    while kept and kept[0].get("role") == "tool":
+        kept.pop(0)
+    return system_msgs + kept
+
+
 async def run_agent_stream(
     pools: dict,
     connections: list[dict],
@@ -198,6 +239,7 @@ async def run_agent_stream(
     language: str = "en",
     skill_prompts: list[str] | None = None,
     correlation_id: str | None = None,
+    settings: dict | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     Agent loop with SSE streaming output.
@@ -205,6 +247,9 @@ async def run_agent_stream(
     ``connections`` is a list of dicts: ``{"connection_name": str, "schemas": [..]}``
     (empty ``schemas`` = all schemas of that connection).
     ``correlation_id`` is a request-scoped trace id included in every log line.
+    ``settings`` is a snapshot of the app-level, model-agnostic AI-query limits
+    (rounds cap, token budget, request timeout, result-row cap, auto-continue,
+    history window); when omitted the current values are loaded from the DB.
 
     Yields SSE-formatted strings to be consumed by StreamingResponse.
     """
@@ -212,6 +257,29 @@ async def run_agent_stream(
     lang_name = "Chinese" if language == "zh" else "English"
     cid = _cid(correlation_id)
     started = time.monotonic()
+
+    # App-level, model-agnostic query limits (services/ai_query_settings.py).
+    if settings is None:
+        settings = await load_ai_query_settings()
+    limits = dict(AI_QUERY_SETTINGS_DEFAULTS)
+    limits.update({k: v for k, v in settings.items() if k in limits})
+    max_rounds = int(limits["max_rounds"])
+    request_timeout_sec = int(limits["request_timeout_sec"])
+    max_result_rows = int(limits["max_result_rows"])
+    auto_continue_rounds = int(limits["auto_continue_rounds"])
+    max_history_messages = int(limits["max_history_messages"])
+    # A global max_tokens (when set) overrides the per-model configuration.
+    _global_max_tokens = limits.get("max_tokens")
+    if _global_max_tokens is None:
+        max_tokens = int(llm_config.get("max_tokens") or DEFAULT_MAX_TOKENS)
+    else:
+        max_tokens = int(_global_max_tokens)
+    logger.info(
+        "[cid=%s] stage=limits max_rounds=%d max_tokens=%d timeout=%ds "
+        "max_result_rows=%d auto_continue=%d history=%d",
+        cid, max_rounds, max_tokens, request_timeout_sec,
+        max_result_rows, auto_continue_rounds, max_history_messages,
+    )
 
     # Filter out connections whose pool is unavailable (failed to initialize)
     available: list[dict] = []
@@ -262,7 +330,9 @@ async def run_agent_stream(
             + "\n(These databases are NOT queryable. Never use them.)"
         )
 
-    system_prompt = AGENT_SYSTEM_PROMPT.format(schema_text=schema_text, language=lang_name)
+    system_prompt = AGENT_SYSTEM_PROMPT.format(
+        schema_text=schema_text, language=lang_name, max_rounds=max_rounds
+    )
 
     # Append user-defined skill prompts (after language directive, before user message)
     if skill_prompts:
@@ -287,10 +357,22 @@ async def run_agent_stream(
     # (multi-system-message not used due to API compatibility concerns)
     messages.append({"role": "user", "content": f"[⬤ Output language: {lang_name}. ALL reasoning, analysis, and conclusions MUST be in {lang_name} — regardless of the question's language or database data values. ⬤] {question}"})
 
-    async with httpx.AsyncClient(timeout=120, verify=False) as client:
-        for _round in range(MAX_ROUNDS):
+    before_trim = len(messages)
+    messages = _trim_history(messages, max_history_messages)
+    if len(messages) != before_trim:
+        logger.info("[cid=%s] stage=history_trim kept=%d/%d", cid, len(messages), before_trim)
+
+    answer_parts: list[str] = []
+    continuations_used = 0
+    llm_time = 0.0
+
+    async with httpx.AsyncClient(timeout=request_timeout_sec, verify=False) as client:
+        for _round in range(max_rounds):
             llm_start = time.monotonic()
-            logger.info("[cid=%s] stage=llm_call round=%d", cid, _round + 1)
+            logger.info(
+                "[cid=%s] stage=llm_call round=%d/%d history_msgs=%d",
+                cid, _round + 1, max_rounds, len(messages),
+            )
 
             # Call LLM with streaming + tool definition
             async with client.stream(
@@ -302,9 +384,11 @@ async def run_agent_stream(
                 },
                 json={
                     "model": model,
-                    "messages": messages,
+                    # Only the recent window goes to the model; ``messages`` keeps
+                    # growing so the whole turn can be persisted.
+                    "messages": _trim_history(messages, max_history_messages),
                     "temperature": llm_config.get("temperature", 0.1),
-                    "max_tokens": llm_config.get("max_tokens", 4096),
+                    "max_tokens": max_tokens,
                     "stream": True,
                     "tools": [TOOL_DEFINITION],
                     "tool_choice": "auto",
@@ -323,6 +407,8 @@ async def run_agent_stream(
                 accumulated_content = ""
                 tool_calls: list[dict] = []
                 tool_call_buf: dict[int, dict] = {}  # index -> {id, name, arguments}
+                finish_reason: str | None = None
+                timed_out = False
 
                 try:
                     async for line in resp.aiter_lines():
@@ -337,7 +423,13 @@ async def run_agent_stream(
                         except json.JSONDecodeError:
                             continue
 
-                        delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        choices = chunk.get("choices") or []
+                        if not choices:
+                            continue
+                        choice = choices[0]
+                        if choice.get("finish_reason"):
+                            finish_reason = choice["finish_reason"]
+                        delta = choice.get("delta") or {}
 
                         # Text content
                         content = delta.get("content", "")
@@ -362,13 +454,35 @@ async def run_agent_stream(
                             if func.get("arguments"):
                                 tool_call_buf[idx]["function"]["arguments"] += func["arguments"]
                 except httpx.ReadTimeout:
+                    timed_out = True
                     logger.warning(
-                        "[cid=%s] stage=llm_stream interrupted reason=read_timeout round=%d duration_ms=%.1f",
-                        cid, _round + 1, (time.monotonic() - llm_start) * 1000,
+                        "[cid=%s] stage=llm_stream interrupted reason=read_timeout round=%d "
+                        "timeout=%ds duration_ms=%.1f",
+                        cid, _round + 1, request_timeout_sec,
+                        (time.monotonic() - llm_start) * 1000,
                     )
-                    yield _sse_event("error", {"message": "LLM 响应超时，已返回部分结果"})
+                    yield _sse_event("error", {"message": (
+                        f"LLM 响应超时（{request_timeout_sec}s），结论不完整；"
+                        "可在「AI 配置 → 通用设置」调大「单次请求超时」。"
+                        "已生成的部分内容保留在上方分析过程中。"
+                    )})
 
             llm_time = round((time.monotonic() - llm_start) * 1000, 2)
+
+            if timed_out:
+                # Partial text already streamed as think events; a half-finished
+                # answer must never be presented as the conclusion.
+                logger.warning(
+                    "[cid=%s] stage=timeout forced done round=%d partial_chars=%d total_ms=%.1f",
+                    cid, _round + 1, len(accumulated_content),
+                    (time.monotonic() - started) * 1000,
+                )
+                yield _sse_event("done", {
+                    "message": "",
+                    "llm_time_ms": llm_time,
+                    "conversation_messages": _trim_history(messages, max_history_messages),
+                })
+                return
 
             # Build assistant message from accumulated content + tool calls
             assistant_msg: dict = {"role": "assistant", "content": accumulated_content or None}
@@ -383,8 +497,10 @@ async def run_agent_stream(
                 if tc["function"]["name"]
             ]
             logger.info(
-                "[cid=%s] stage=llm_done round=%d duration_ms=%.1f content_chars=%d tool_calls=%d",
-                cid, _round + 1, llm_time, len(accumulated_content), len(tool_calls_final),
+                "[cid=%s] stage=llm_done round=%d duration_ms=%.1f content_chars=%d "
+                "tool_calls=%d finish_reason=%s",
+                cid, _round + 1, llm_time, len(accumulated_content),
+                len(tool_calls_final), finish_reason,
             )
 
             if tool_calls_final:
@@ -395,17 +511,65 @@ async def run_agent_stream(
 
             # Execute tool calls
             if not tool_calls_final:
-                # No tool calls → LLM is done
+                # No tool calls → this round produced the answer text bit.
+                if accumulated_content:
+                    answer_parts.append(accumulated_content)
+                answer_text = "".join(answer_parts)
+
+                if finish_reason == "length" and continuations_used < auto_continue_rounds:
+                    continuations_used += 1
+                    logger.warning(
+                        "[cid=%s] stage=truncated round=%d action=continue "
+                        "auto_continue=%d/%d",
+                        cid, _round + 1, continuations_used, auto_continue_rounds,
+                    )
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "[续写] 上次输出因 token 上限中断，请从断点继续，"
+                            "不要重复已输出内容。"
+                        ),
+                    })
+                    continue
+
+                if finish_reason == "length":
+                    logger.warning(
+                        "[cid=%s] stage=truncated round=%d action=give_up "
+                        "auto_continue=%d/%d",
+                        cid, _round + 1, continuations_used, auto_continue_rounds,
+                    )
+                    # Never let half an answer masquerade as the conclusion.
+                    yield _sse_event("error", {"message": (
+                        f"输出达到 token 上限被截断（已自动续写 {continuations_used} 次），"
+                        "结论可能不完整；可在「AI 配置 → 通用设置」中调大"
+                        "「单轮输出 token 上限」。已生成内容见上方分析过程。"
+                    )})
+                    yield _sse_event("done", {
+                        "message": "",
+                        "llm_time_ms": llm_time,
+                        "conversation_messages": _trim_history(messages, max_history_messages),
+                    })
+                    return
+
                 logger.info(
                     "[cid=%s] stage=done rounds=%d llm_time_ms=%.1f total_ms=%.1f",
                     cid, _round + 1, llm_time, (time.monotonic() - started) * 1000,
                 )
                 yield _sse_event("done", {
-                    "message": accumulated_content,
+                    "message": answer_text,
                     "llm_time_ms": llm_time,
-                    "conversation_messages": messages,
+                    "conversation_messages": _trim_history(messages, max_history_messages),
                 })
                 return
+
+            # Tool calls → text produced so far is intermediate analysis, not a
+            # conclusion; the next round starts a fresh answer.
+            answer_parts = []
+            if finish_reason == "length":
+                logger.warning(
+                    "[cid=%s] stage=truncated_with_tool_calls round=%d",
+                    cid, _round + 1,
+                )
 
             for tc in tool_calls_final:
                 func_name = tc["function"]["name"]
@@ -452,12 +616,12 @@ async def run_agent_stream(
                         columns, rows = await _execute_sql(pools, db_name, validated_or_err)
                         result_preview = json.dumps({
                             "columns": columns,
-                            "rows": rows[:20],  # Preview first 20 rows
+                            "rows": rows[:min(20, max_result_rows)],
                             "total_rows": len(rows),
                         }, ensure_ascii=False)
                         yield _sse_event("result", {
                             "columns": columns,
-                            "rows": rows[:100],
+                            "rows": rows[:max_result_rows],
                             "total_rows": len(rows),
                         })
                         # Prepend language reminder to tool result to prevent
@@ -483,11 +647,16 @@ async def run_agent_stream(
 
         # Max rounds reached
         logger.warning(
-            "[cid=%s] stage=max_rounds forced done, total_ms=%.1f",
-            cid, (time.monotonic() - started) * 1000,
+            "[cid=%s] stage=max_rounds forced done rounds=%d total_ms=%.1f",
+            cid, max_rounds, (time.monotonic() - started) * 1000,
         )
+        yield _sse_event("error", {"message": (
+            f"已执行最大轮数（工具调用轮次上限 {max_rounds}），分析在此结束；"
+            "可在「AI 配置 → 通用设置」调大「最大工具调用轮次」。"
+            "已生成内容见上方分析过程。"
+        )})
         yield _sse_event("done", {
-            "message": accumulated_content or "已执行最大轮数，分析结束。",
+            "message": "",
             "llm_time_ms": llm_time,
-            "conversation_messages": messages,
+            "conversation_messages": _trim_history(messages, max_history_messages),
         })

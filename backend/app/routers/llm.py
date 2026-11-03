@@ -17,10 +17,17 @@ from app.schemas.llm import (
     TestLLMResponse,
     NLQueryRequest,
     NLQueryResponse,
+    AIQuerySettingsUpdate,
+    AIQuerySettingsResponse,
 )
 from app.sqlite_store import LLMConfigStore, ConversationStore, SkillStore
 from app.services.llm_service import execute_nl_query
 from app.services.llm_agent_service import run_agent_stream
+from app.services.ai_query_settings import (
+    AI_QUERY_SETTINGS_DEFAULTS,
+    load_ai_query_settings,
+    save_ai_query_settings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +63,28 @@ def _resolve_connections(body: NLQueryRequest) -> list[dict]:
     if body.connection_name:
         return [{"connection_name": body.connection_name, "schemas": []}]
     raise HTTPException(status_code=400, detail="请至少选择一个数据库连接")
+
+
+# ─── AI query settings (global, model-agnostic) ────────────────────
+
+
+@router.get("/api/v1/ai-query-settings", response_model=AIQuerySettingsResponse)
+async def get_ai_query_settings():
+    """Effective AI-query settings that apply to every model and query."""
+    values = await load_ai_query_settings()
+    return AIQuerySettingsResponse(
+        values=values, defaults=dict(AI_QUERY_SETTINGS_DEFAULTS)
+    )
+
+
+@router.put("/api/v1/ai-query-settings", response_model=AIQuerySettingsResponse)
+async def put_ai_query_settings(body: AIQuerySettingsUpdate):
+    """Partial update; only the fields present in the request are changed."""
+    patch = {name: getattr(body, name) for name in body.model_fields_set}
+    values = await save_ai_query_settings(patch)
+    return AIQuerySettingsResponse(
+        values=values, defaults=dict(AI_QUERY_SETTINGS_DEFAULTS)
+    )
 
 
 # ─── LLM Config CRUD ───────────────────────────────────────────────
@@ -337,6 +366,10 @@ async def nl_query_stream(body: NLQueryRequest, request: Request):
             _BACKGROUND_SAVES.add(task)
             task.add_done_callback(_BACKGROUND_SAVES.discard)
 
+        # Global (model-agnostic) AI-query settings: rounds cap, token budget,
+        # request timeout, result-row cap, auto-continue and history window.
+        ai_settings = await load_ai_query_settings()
+
         try:
             # Announce the conversation id immediately: the UI can attach the
             # running stream (and the user can find the conversation in the
@@ -352,6 +385,7 @@ async def nl_query_stream(body: NLQueryRequest, request: Request):
                 language=body.language,
                 skill_prompts=skill_prompts,
                 correlation_id=correlation_id,
+                settings=ai_settings,
             ):
                 if sse_str.startswith("data: "):
                     try:

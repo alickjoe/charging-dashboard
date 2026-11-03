@@ -39,6 +39,27 @@ class LLMConfigUpdate(BaseModel):
     is_default: Optional[bool] = None
 
 
+class AIQuerySettingsUpdate(BaseModel):
+    """Partial update for app-level (model-agnostic) AI query settings.
+
+    Field presence matters: omitted fields are left untouched, while an
+    explicit ``max_tokens: null`` clears the global override so each model
+    falls back to its own ``max_tokens``.
+    """
+
+    max_rounds: Optional[int] = Field(default=None, ge=1, le=2000)
+    max_tokens: Optional[int] = Field(default=None, ge=1, le=32768)
+    request_timeout_sec: Optional[int] = Field(default=None, ge=10, le=1800)
+    max_result_rows: Optional[int] = Field(default=None, ge=10, le=1000)
+    auto_continue_rounds: Optional[int] = Field(default=None, ge=0, le=5)
+    max_history_messages: Optional[int] = Field(default=None, ge=0, le=200)
+
+
+class AIQuerySettingsResponse(BaseModel):
+    values: dict
+    defaults: dict
+
+
 class TestLLMResponse(BaseModel):
     status: str  # "ok" | "error"
     message: str

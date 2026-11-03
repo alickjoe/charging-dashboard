@@ -116,6 +116,12 @@ CREATE TABLE IF NOT EXISTS skills (
     created_at          TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
@@ -1175,3 +1181,88 @@ class SkillStore:
             finally:
                 conn.close()
         return await asyncio.to_thread(_do)
+
+
+class SettingsStore:
+    """Key-value store for app-level settings (table: app_settings).
+
+    Values are stored as text; callers own (de)serialization. Only keys the
+    user actually customized live in the DB — defaults stay in code so they
+    can be improved without migrations.
+    """
+
+    @staticmethod
+    async def get_all(prefix: str | None = None) -> dict[str, str]:
+        def _do():
+            conn = _get_conn()
+            try:
+                if prefix:
+                    rows = conn.execute(
+                        "SELECT key, value FROM app_settings WHERE key LIKE ?",
+                        (prefix + "%",),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT key, value FROM app_settings"
+                    ).fetchall()
+                return {r["key"]: r["value"] for r in rows}
+            finally:
+                conn.close()
+        return await asyncio.to_thread(_do)
+
+    @staticmethod
+    async def get_many(keys: list[str]) -> dict[str, str]:
+        if not keys:
+            return {}
+
+        def _do():
+            conn = _get_conn()
+            try:
+                placeholders = ",".join("?" for _ in keys)
+                rows = conn.execute(
+                    f"SELECT key, value FROM app_settings WHERE key IN ({placeholders})",
+                    keys,
+                ).fetchall()
+                return {r["key"]: r["value"] for r in rows}
+            finally:
+                conn.close()
+        return await asyncio.to_thread(_do)
+
+    @staticmethod
+    async def upsert_many(mapping: dict[str, str]) -> None:
+        if not mapping:
+            return
+
+        def _do():
+            conn = _get_conn()
+            try:
+                conn.executemany(
+                    """INSERT INTO app_settings (key, value, updated_at)
+                       VALUES (?, ?, datetime('now'))
+                       ON CONFLICT(key) DO UPDATE SET
+                           value = excluded.value,
+                           updated_at = datetime('now')""",
+                    list(mapping.items()),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        await asyncio.to_thread(_do)
+
+    @staticmethod
+    async def delete_many(keys: list[str]) -> None:
+        if not keys:
+            return
+
+        def _do():
+            conn = _get_conn()
+            try:
+                placeholders = ",".join("?" for _ in keys)
+                conn.execute(
+                    f"DELETE FROM app_settings WHERE key IN ({placeholders})",
+                    keys,
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        await asyncio.to_thread(_do)
