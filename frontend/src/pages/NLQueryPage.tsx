@@ -806,12 +806,31 @@ export default function NLQueryPage() {
         }}>
           {activeConvMeta ? (
             <>
-              <Text strong style={{ fontSize: 15 }}>{activeConvMeta.title || t('chat.newConversation')}</Text>
-              {dbScopeTags.slice(0, 3).map((tag) => (
-                <Tag key={tag.key} color="cyan">{tag.text}</Tag>
-              ))}
-              {dbScopeTags.length > 3 && <Tag>+{dbScopeTags.length - 3}</Tag>}
-              <Tag color="blue">{llmName}</Tag>
+              <Text strong style={{
+                fontSize: 15,
+                flexShrink: 0,
+                maxWidth: '38%',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}>{activeConvMeta.title || t('chat.newConversation')}</Text>
+              {/* Long DB/schema tag lists must never squeeze the title: the
+                  container clips and every tag ellipsizes (title = full text). */}
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                flex: 1, minWidth: 0, overflow: 'hidden',
+              }}>
+                {dbScopeTags.slice(0, 3).map((tag) => (
+                  <Tag key={tag.key} color="cyan" title={tag.text} style={{
+                    margin: 0, maxWidth: 320, overflow: 'hidden',
+                    textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0,
+                  }}>{tag.text}</Tag>
+                ))}
+                {dbScopeTags.length > 3 && (
+                  <Tag style={{ margin: 0, flexShrink: 0 }}>+{dbScopeTags.length - 3}</Tag>
+                )}
+              </div>
+              <Tag color="blue" style={{ margin: 0, flexShrink: 0 }}>{llmName}</Tag>
             </>
           ) : (
             <>
@@ -998,7 +1017,10 @@ export default function NLQueryPage() {
                 {/* DB scope tags: which databases & schemas this conversation queries */}
                 <div style={{ marginTop: 3, display: 'flex', gap: 3, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                   {dbScopeTags.map((tag) => (
-                    <Tag key={tag.key} color="cyan" style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>{tag.text}</Tag>
+                    <Tag key={tag.key} color="cyan" title={tag.text} style={{
+                      fontSize: 10, lineHeight: '16px', margin: 0,
+                      maxWidth: 420, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>{tag.text}</Tag>
                   ))}
                 </div>
                 {(() => {
