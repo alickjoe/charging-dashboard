@@ -429,8 +429,22 @@ async def run_agent_stream(
     messages = [{"role": "system", "content": system_prompt}]
     if history_messages:
         for msg in history_messages:
-            if msg.get("role") != "system":
-                messages.append(msg)
+            if msg.get("role") == "system":
+                continue
+            # A past turn may have been persisted with leaked tool markup / a
+            # prompt echo; replaying it teaches the model to degenerate again.
+            if (
+                msg.get("role") == "assistant"
+                and not msg.get("tool_calls")
+                and isinstance(msg.get("content"), str)
+                and _detect_bad_round(msg["content"], question)
+            ):
+                logger.warning(
+                    "[cid=%s] stage=history_drop_bad_assistant chars=%d",
+                    cid, len(msg["content"]),
+                )
+                continue
+            messages.append(msg)
     # Inject language directive into user message for double enforcement
     # (multi-system-message not used due to API compatibility concerns)
     messages.append({"role": "user", "content": f"[⬤ Output language: {lang_name}. ALL reasoning, analysis, and conclusions MUST be in {lang_name} — regardless of the question's language or database data values. ⬤] {question}"})
