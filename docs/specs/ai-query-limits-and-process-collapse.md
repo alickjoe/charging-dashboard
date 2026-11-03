@@ -128,6 +128,18 @@ class AIQuerySettingsUpdate(BaseModel):
 
 ---
 
+## 2.8 真正的「一直重复 / 最后中断」根因（2026-11-03 补，GLM 同样复现）
+
+用户用 GLM 跑同一个分析也出现「反复从『我先探索数据库结构』重来、最后中断」，说明与模型无关，是我们自己的两个 bug：
+
+1. **历史窗口裁剪把当前问题裁掉了**（致命）。`_trim_history` 只在一个窗口内寻找 `user` 边界，而一轮 agent 对话只有开头一个 user 消息；当消息数超过 `max_history_messages + 2`（默认 22）后，窗口里找不到 user，循环一路推进到末尾 → 裁剪结果只剩 system（tool 消息还被当孤儿丢掉）。于是**每一轮发给模型的内容里都没有问题本身**，模型只能凭系统提示词（含 skill 文本）重新规划 → 每 ~20 次工具调用就来一次「重新探索数据库」，永远走不到结论。
+   修复：始终保留最后一个 `user` 消息（当前问题），先丢最老的历史；尾部在 `assistant` 边界处裁剪（assistant 不依赖前文，而 tool 回复必须跟在其 assistant 调用之后），并继续剥离开头孤立的 tool 消息。
+2. **工具结果 JSON 序列化崩溃**。`asyncpg` 返回 `datetime` / `Decimal`，`json.dumps` 直接抛 `Object of type datetime is not JSON serializable`：SSE 的 `result` 事件在流中途抛错（用户看到「最后中断」），回给模型的 tool_result 也变成 `Query execution failed: ...`，模型于是换写法重试同一个查询。
+   修复：`_sse_event` 与结果预览统一 `default=str`，时间/金额以字符串形式进入结果与模型上下文。
+3. 结果预览此前固定 `rows[:min(20, max_result_rows)]`，模型只能看到 245 张表里的 20 张，于是不断重查。现在预览按 `max_result_rows` 截断，并在被截断时附加 `note`：「只显示前 N 行，不要重复执行同一查询，请用聚合/过滤」。
+
+---
+
 ## 3. 需求二：查询结束后折叠过程、只显示结论
 
 ### 3.1 现状

@@ -183,9 +183,20 @@ async def _execute_sql(
     return columns, [list(r.values()) for r in rows]
 
 
+def _json_default(value):
+    """Serialise DB values the stdlib JSON encoder cannot handle.
+
+    ``asyncpg`` returns ``datetime`` / ``Decimal`` / ``UUID`` objects; without
+    this the SSE event (and the tool payload sent back to the model) raised
+    "Object of type datetime is not JSON serializable", which aborted the
+    stream mid-answer and made the model retry the same query forever.
+    """
+    return str(value)
+
+
 def _sse_event(event_type: str, data: dict) -> str:
     """Format an SSE event."""
-    payload = json.dumps({"type": event_type, **data}, ensure_ascii=False)
+    payload = json.dumps({"type": event_type, **data}, ensure_ascii=False, default=_json_default)
     return f"data: {payload}\n\n"
 
 
@@ -274,11 +285,15 @@ def _detect_bad_round(content: str, question: str) -> str | None:
 def _trim_history(messages: list[dict], limit: int) -> list[dict]:
     """Bound the conversation window sent to the LLM.
 
-    Keeps the leading system message(s) and the last ``limit`` messages, then
-    advances the cut point to the first clean ``user`` message: a window that
-    starts in the middle of a tool-call sequence (an assistant ``tool_calls``
-    message without its ``tool`` replies, or a ``tool`` reply without its call)
-    is rejected by the provider. ``limit <= 0`` disables trimming.
+    The current turn's question (the last ``user`` message) is always kept: an
+    earlier version only looked for a ``user`` boundary inside the window, so
+    once an agent turn grew past the window every request degenerated to
+    ``[system]`` alone — the model lost the question and restarted its analysis
+    from scratch, over and over, on every model.  Older history is dropped
+    first; the recent tail is cut immediately before an ``assistant`` message
+    because an assistant message never depends on what precedes it, while a
+    ``tool`` reply always belongs to the assistant call above it.
+    ``limit <= 0`` disables trimming.
     """
     if limit <= 0 or len(messages) <= limit + 2:
         return messages
@@ -290,21 +305,33 @@ def _trim_history(messages: list[dict], limit: int) -> list[dict]:
     if not rest:
         return messages
 
-    start = max(0, len(rest) - limit)
-    while start < len(rest) - 1:
-        msg = rest[start]
-        prev = rest[start - 1] if start > 0 else None
-        prev_is_open_tool_call = bool(
-            prev and prev.get("role") == "assistant" and prev.get("tool_calls")
-        )
-        if msg.get("role") == "user" and not prev_is_open_tool_call:
-            break
-        start += 1
+    last_user = None
+    for idx, msg in enumerate(rest):
+        if msg.get("role") == "user":
+            last_user = idx
+    if last_user is None:
+        return system_msgs + rest[-limit:]
 
-    kept = rest[start:]
-    # Orphaned tool replies whose assistant call was trimmed away.
-    while kept and kept[0].get("role") == "tool":
-        kept.pop(0)
+    tail = rest[last_user + 1:]
+    budget = max(1, limit - 1)  # room for the question itself
+    start = max(0, len(tail) - budget)
+    while start < len(tail) and tail[start].get("role") != "assistant":
+        start += 1
+    if start >= len(tail):
+        start = max(0, len(tail) - budget)
+    kept_tail = tail[start:]
+    while kept_tail and kept_tail[0].get("role") == "tool":
+        kept_tail.pop(0)
+
+    # Fill the remaining budget with the newest older history.
+    kept = [rest[last_user]] + kept_tail
+    room = budget + 1 - len(kept)
+    if room > 0:
+        prefix = rest[:last_user]
+        pstart = max(0, len(prefix) - room)
+        while pstart < len(prefix) and prefix[pstart].get("role") == "tool":
+            pstart += 1
+        kept = prefix[pstart:] + kept
     return system_msgs + kept
 
 
@@ -770,11 +797,22 @@ async def run_agent_stream(
                     sql_start = time.monotonic()
                     try:
                         columns, rows = await _execute_sql(pools, db_name, validated_or_err)
-                        result_preview = json.dumps({
+                        preview_rows = rows[:max_result_rows]
+                        truncated = len(rows) > len(preview_rows)
+                        payload = {
                             "columns": columns,
-                            "rows": rows[:min(20, max_result_rows)],
+                            "rows": preview_rows,
                             "total_rows": len(rows),
-                        }, ensure_ascii=False)
+                        }
+                        if truncated:
+                            payload["note"] = (
+                                f"Result truncated: showing the first {len(preview_rows)} of "
+                                f"{len(rows)} rows. Do NOT re-run the same query to see the rest; "
+                                "aggregate (count/sum/group by) or add filters instead."
+                            )
+                        result_preview = json.dumps(
+                            payload, ensure_ascii=False, default=_json_default
+                        )
                         yield _sse_event("result", {
                             "columns": columns,
                             "rows": rows[:max_result_rows],
