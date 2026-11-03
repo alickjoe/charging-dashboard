@@ -114,7 +114,25 @@
     "testSuccess": "连接成功 (模型: {model})",
     "apiError": "API 返回错误 ({status}): {detail}",
     "connectionTimeout": "连接超时",
-    "connectionFailed": "连接失败: {error}"
+    "connectionFailed": "连接失败: {error}",
+    "generalSettings": {
+      "title": "AI 查询通用设置",
+      "desc": "这些设置对所有模型、所有 AI 查询生效。",
+      "maxRounds": "工具调用轮次上限",
+      "maxTokens": "单轮输出 token 上限",
+      "maxTokensPlaceholder": "留空则使用各模型配置",
+      "requestTimeout": "单次请求超时（秒）",
+      "maxResultRows": "单条查询结果行数上限",
+      "autoContinue": "截断自动续写次数",
+      "autoContinueHint": "0 = 不自动续写",
+      "maxHistory": "历史消息条数上限",
+      "maxHistoryHint": "0 = 不限制",
+      "save": "保存",
+      "reset": "恢复默认",
+      "saved": "通用设置已保存",
+      "saveError": "通用设置保存失败",
+      "loadError": "通用设置加载失败"
+    }
   },
   "database": {
     "schema": "Schema：",
@@ -216,7 +234,9 @@
     "phaseConnecting": "正在连接 AI 服务...",
     "phaseThinking": "AI 正在分析...",
     "phaseExecuting": "正在执行查询...",
-    "phaseDone": "分析完成"
+    "phaseDone": "分析完成",
+    "process": "分析过程",
+    "processSteps": "{count} 步"
   },
   "breadcrumb": {
     "connections": "连接管理"

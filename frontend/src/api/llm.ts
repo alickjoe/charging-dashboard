@@ -162,3 +162,38 @@ export function executeNLQueryStream(
 
   return controller;
 }
+
+// ─── AI 查询通用设置（全局，对所有模型 / 所有 AI 查询生效） ──────
+
+/**
+ * Effective + default values of the global AI-query settings.
+ *
+ * `max_tokens: null` means "no global override" — each model config's own
+ * `max_tokens` is used instead.
+ */
+export interface AIQuerySettingsValues {
+  max_rounds: number;
+  max_tokens: number | null;
+  request_timeout_sec: number;
+  max_result_rows: number;
+  auto_continue_rounds: number;
+  max_history_messages: number;
+}
+
+export interface AIQuerySettings {
+  values: AIQuerySettingsValues;
+  defaults: AIQuerySettingsValues;
+}
+
+/** Partial update: omitting a field keeps the stored value; `max_tokens: null` clears the override. */
+export type AIQuerySettingsUpdate = Partial<AIQuerySettingsValues>;
+
+export async function fetchAIQuerySettings(): Promise<AIQuerySettings> {
+  const { data } = await api.get<AIQuerySettings>('/ai-query-settings');
+  return data;
+}
+
+export async function updateAIQuerySettings(payload: AIQuerySettingsUpdate): Promise<AIQuerySettings> {
+  const { data } = await api.put<AIQuerySettings>('/ai-query-settings', payload);
+  return data;
+}

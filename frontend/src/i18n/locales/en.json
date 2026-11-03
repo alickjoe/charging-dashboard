@@ -114,7 +114,25 @@
     "testSuccess": "Connected (Model: {model})",
     "apiError": "API Error ({status}): {detail}",
     "connectionTimeout": "Connection Timeout",
-    "connectionFailed": "Connection Failed: {error}"
+    "connectionFailed": "Connection Failed: {error}",
+    "generalSettings": {
+      "title": "AI Query Settings",
+      "desc": "These settings apply to every model and every AI query.",
+      "maxRounds": "Max tool-call rounds",
+      "maxTokens": "Max output tokens per round",
+      "maxTokensPlaceholder": "Leave empty to use each model's setting",
+      "requestTimeout": "Request timeout (seconds)",
+      "maxResultRows": "Max rows per query result",
+      "autoContinue": "Auto-continue rounds on truncation",
+      "autoContinueHint": "0 = never auto-continue",
+      "maxHistory": "Max history messages",
+      "maxHistoryHint": "0 = unlimited",
+      "save": "Save",
+      "reset": "Restore defaults",
+      "saved": "Settings saved",
+      "saveError": "Failed to save settings",
+      "loadError": "Failed to load settings"
+    }
   },
   "database": {
     "schema": "Schema:",
@@ -216,7 +234,9 @@
     "phaseConnecting": "Connecting to AI service...",
     "phaseThinking": "AI is analyzing...",
     "phaseExecuting": "Executing query...",
-    "phaseDone": "Analysis Complete"
+    "phaseDone": "Analysis Complete",
+    "process": "Process",
+    "processSteps": "{count} steps"
   },
   "breadcrumb": {
     "connections": "Connections"

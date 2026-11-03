@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, memo, useMemo, useSyncExternalStore } from 'react';
+import { useState, useRef, useEffect, useMemo, useSyncExternalStore } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Select, Input, Button, Card, Space, Spin, Alert, Typography,
@@ -6,7 +6,6 @@ import {
 } from 'antd';
 import {
   SendOutlined, StopOutlined, BarChartOutlined,
-  CodeOutlined, TableOutlined,
   PlusOutlined, DeleteOutlined, MessageOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined,
 } from '@ant-design/icons';
@@ -16,8 +15,8 @@ import { fetchLLMConfigs } from '../api/llm';
 import { fetchConversations, fetchConversationDetail, deleteConversation, updateConversationSkills } from '../api/conversations';
 import { fetchSkills } from '../api/skills';
 import { queryStreamManager, isActivePhase } from '../services/queryStreamManager';
-import type { QueryStream, StreamBlock, StreamBlockType } from '../services/queryStreamManager';
-import MarkdownRenderer from '../components/Markdown';
+import type { QueryStream } from '../services/queryStreamManager';
+import AnswerBlocks, { parseAnswerBlocks } from '../components/AnswerBlocks';
 import { useToast } from '../components/Toast';
 import type {
   ConnectionInfo, ConnectionSchemaSelection, LLMConfig,
@@ -28,168 +27,10 @@ import { useTranslation } from 'react-i18next';
 import { useLanguageStore } from '../i18n/store';
 
 const { TextArea } = Input;
-const { Paragraph, Text } = Typography;
+const { Text } = Typography;
 
-// ─── Block Types (stream state lives in queryStreamManager) ──────
-
-// ─── Markdown rendering is delegated to <MarkdownRenderer /> ─────
-
-// ─── Mini Result Table ────────────────────────────────────────────
-
-function MiniResultTable({ columns, rows, totalRows }: {
-  columns: string[];
-  rows: unknown[][];
-  totalRows?: number;
-}) {
-  const { t } = useTranslation();
-  if (!columns.length) return <Text type="secondary">{t('chat.noResults')}</Text>;
-  return (
-    <div style={{ overflowX: 'auto' }}>
-      <table
-        style={{
-          borderCollapse: 'collapse', width: '100%',
-          fontSize: 13, fontFamily: 'monospace',
-        }}
-      >
-        <thead>
-          <tr style={{ background: '#f0f0f0' }}>
-            {columns.map((col) => (
-              <th key={col} style={{
-                border: '1px solid #ddd', padding: '4px 8px',
-                textAlign: 'left', fontWeight: 600,
-              }}>
-                {col}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, ri) => (
-            <tr key={ri}>
-              {row.map((val, ci) => (
-                <td key={ci} style={{
-                  border: '1px solid #eee', padding: '2px 8px',
-                  maxWidth: 300, overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                }}>
-                  {val === null ? (
-                    <span style={{ color: '#aaa' }}>NULL</span>
-                  ) : String(val)}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {totalRows !== undefined && totalRows > rows.length && (
-        <Text type="secondary" style={{ display: 'block', marginTop: 4 }}>
-          {t('chat.showingRows', { shown: rows.length, total: totalRows })}
-        </Text>
-      )}
-    </div>
-  );
-}
-
-// ─── Render a single block ────────────────────────────────────────
-
-function BlockView({ block }: { block: StreamBlock }) {
-  const { t } = useTranslation();
-  switch (block.type) {
-    case 'think':
-      return (
-        <div style={{ marginBottom: 16 }}>
-          <MarkdownRenderer text={block.content} />
-        </div>
-      );
-    case 'summary':
-      // Final conclusion — shown exactly once (deduplicated against think blocks)
-      return (
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ marginBottom: 4 }}>
-            <Tag color="success">{t('block.analysisDone')}</Tag>
-          </div>
-          <MarkdownRenderer text={block.content} />
-        </div>
-      );
-    case 'sql':
-      return (
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-            <CodeOutlined style={{ color: '#1890ff' }} />
-            <Text strong style={{ fontSize: 13 }}>{t('block.sqlQuery')}</Text>
-          </div>
-          <Paragraph
-            copyable
-            code
-            style={{
-              background: '#1e1e1e', color: '#d4d4d4',
-              padding: 12, borderRadius: 6,
-              whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0,
-            }}
-          >
-            {block.content}
-          </Paragraph>
-        </div>
-      );
-    case 'result':
-      return (
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-            <TableOutlined style={{ color: '#52c41a' }} />
-            <Text strong style={{ fontSize: 13 }}>{t('block.queryResult')}</Text>
-            {block.totalRows !== undefined && <Tag>{t('block.rows', { count: block.totalRows })}</Tag>}
-          </div>
-          <MiniResultTable
-            columns={block.columns || []}
-            rows={block.rows || []}
-            totalRows={block.totalRows}
-          />
-        </div>
-      );
-    case 'error':
-      return (
-        <Alert
-          type="warning"
-          message={block.content}
-          showIcon
-          style={{ marginBottom: 16 }}
-        />
-      );
-    default:
-      return null;
-  }
-}
-
-const MemoBlockView = memo(BlockView);
-
-// ─── Parse answer_blocks JSON ─────────────────────────────────────
-
-function parseAnswerBlocks(raw: string): StreamBlock[] {
-  try {
-    const arr = JSON.parse(raw);
-    if (!Array.isArray(arr)) return [];
-    // Merge consecutive think blocks to handle fragmented history data
-    const merged: StreamBlock[] = [];
-    for (const b of arr) {
-      const blockType = (b.type as StreamBlockType) || 'think';
-      if (blockType === 'think' && merged.length > 0 && merged[merged.length - 1].type === 'think') {
-        merged[merged.length - 1].content += (b.content as string) || '';
-      } else {
-        merged.push({
-          key: merged.length,
-          type: blockType,
-          content: (b.content as string) || '',
-          columns: b.columns as string[] | undefined,
-          rows: b.rows as unknown[][] | undefined,
-          totalRows: b.total_rows as number | undefined,
-        });
-      }
-    }
-    return merged;
-  } catch {
-    return [];
-  }
-}
+// Answer rendering (BlockView / MiniResultTable / parseAnswerBlocks) lives in
+// components/AnswerBlocks.tsx so streaming and history share one layout.
 
 // ─── Page Component ───────────────────────────────────────────────
 
@@ -635,14 +476,6 @@ export default function NLQueryPage() {
   // ── Merge historic + streaming messages for display ──
   const displayMessages = [...messages];
 
-  // ── Memoized streaming think node to avoid re-parsing on elapsed timer ticks ──
-  const renderThinkNode = (think: string) =>
-    think ? (
-      <div style={{ marginBottom: 16 }}>
-        <MarkdownRenderer text={think} />
-      </div>
-    ) : null;
-
   // ── Anchor navigation ──
   const userMessages = useMemo(
     () => displayMessages.filter((m) => m.role === 'user'),
@@ -1060,12 +893,11 @@ export default function NLQueryPage() {
                     overflowX: 'auto',
                     minWidth: 0,
                   }}>
-                    {parseAnswerBlocks(msg.answer_blocks).map((block) => (
-                      <BlockView key={block.key} block={block} />
-                    ))}
-                    {msg.llm_time_ms && (
-                      <Tag color="blue" style={{ marginTop: 4 }}>{t('chat.llmTime', { time: msg.llm_time_ms })}</Tag>
-                    )}
+                    <AnswerBlocks
+                      blocks={parseAnswerBlocks(msg.answer_blocks)}
+                      llmTimeMs={msg.llm_time_ms}
+                      collapsible
+                    />
                   </div>
                 </div>
               )}
@@ -1107,11 +939,12 @@ export default function NLQueryPage() {
                   overflowX: 'auto',
                   minWidth: 0,
                 }}>
-                  {s.blocks.map((block) => (
-                    <MemoBlockView key={block.key} block={block} />
-                  ))}
-
-                  {renderThinkNode(s.think)}
+                  <AnswerBlocks
+                    blocks={s.blocks}
+                    think={s.think}
+                    llmTimeMs={s.llmTimeMs}
+                    collapsible={!isActivePhase(s.phase)}
+                  />
 
                   {isActivePhase(s.phase) && s.blocks.length === 0 && !s.think && (
                     <div style={{ textAlign: 'center', padding: 16 }}>
@@ -1127,10 +960,6 @@ export default function NLQueryPage() {
                   )}
                   {!isActivePhase(s.phase) && s.phase !== 'done' && s.phase !== 'stopped' && s.blocks.length > 0 && (
                     <Tag color="orange" style={{ marginTop: 4 }}>{t('chat.streamPartial')}</Tag>
-                  )}
-
-                  {s.llmTimeMs && (
-                    <Tag color="blue" style={{ marginTop: 4 }}>{t('chat.llmTime', { time: s.llmTimeMs })}</Tag>
                   )}
                 </div>
               </div>

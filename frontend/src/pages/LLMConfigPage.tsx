@@ -1,12 +1,33 @@
-import { useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Row, Col, Modal, Form, Input, InputNumber, Switch, Button, Spin, Alert } from 'antd';
+import { useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Row, Col, Modal, Form, Input, InputNumber, Switch, Button, Spin, Alert, Card, Space, Typography } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
-import { fetchLLMConfigs, createLLMConfig, updateLLMConfig } from '../api/llm';
+import { fetchLLMConfigs, createLLMConfig, updateLLMConfig, fetchAIQuerySettings, updateAIQuerySettings } from '../api/llm';
+import type { AIQuerySettingsUpdate, AIQuerySettingsValues } from '../api/llm';
 import LLMConfigCard from '../components/LLMConfigCard';
 import type { LLMConfig, LLMConfigFormData } from '../types';
 import { useTranslation } from 'react-i18next';
 import { useToast } from '../components/Toast';
+
+const { Text } = Typography;
+
+// Small labelled wrapper for the global AI query settings fields.
+function SettingField({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+  return (
+    <div>
+      <div style={{ marginBottom: 4 }}>
+        <Text type="secondary" style={{ fontSize: 12 }}>{label}</Text>
+      </div>
+      {children}
+      {hint ? (
+        <div style={{ marginTop: 2 }}>
+          <Text type="secondary" style={{ fontSize: 11 }}>{hint}</Text>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 export default function LLMConfigPage() {
   const { t } = useTranslation();
@@ -21,6 +42,45 @@ export default function LLMConfigPage() {
     queryKey: ['llm-configs'],
     queryFn: fetchLLMConfigs,
   });
+
+  // Global AI query settings (apply to every model / every AI query)
+  const { data: aiSettings, isError: generalIsError } = useQuery({
+    queryKey: ['ai-query-settings'],
+    queryFn: fetchAIQuerySettings,
+  });
+  const [general, setGeneral] = useState<AIQuerySettingsValues | null>(null);
+
+  useEffect(() => {
+    if (aiSettings) setGeneral(aiSettings.values);
+  }, [aiSettings]);
+
+  const saveGeneralMutation = useMutation({
+    mutationFn: (payload: AIQuerySettingsUpdate) => updateAIQuerySettings(payload),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['ai-query-settings'] });
+      setGeneral(data.values);
+      toast.success(t('llm.generalSettings.saved'));
+    },
+    onError: () => toast.error(t('llm.generalSettings.saveError')),
+  });
+
+  const setGeneralValue = (patch: Partial<AIQuerySettingsValues>) => {
+    setGeneral((prev) => (prev ? { ...prev, ...patch } : prev));
+  };
+
+  // Empty InputNumber -> fall back to the server default (never send null for these fields).
+  const numberChange = (key: keyof AIQuerySettingsValues) => (value: number | null) => {
+    const fallback = aiSettings?.defaults[key] ?? 0;
+    setGeneralValue({ [key]: value ?? fallback } as Partial<AIQuerySettingsValues>);
+  };
+
+  const handleSaveGeneral = () => {
+    if (general) saveGeneralMutation.mutate(general);
+  };
+
+  const handleResetGeneral = () => {
+    if (aiSettings) setGeneral(aiSettings.defaults);
+  };
 
   const handleAdd = () => {
     setEditingConfig(null);
@@ -72,6 +132,105 @@ export default function LLMConfigPage() {
         <h2 style={{ margin: 0 }}>{t('llm.title')}</h2>
         <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>{t('llm.add')}</Button>
       </div>
+
+      {/* AI query settings shared by all models — see docs/specs/ai-query-limits-and-process-collapse.md */}
+      <Card size="small" style={{ marginBottom: 24 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
+          <div>
+            <Text strong>{t('llm.generalSettings.title')}</Text>
+            <div><Text type="secondary" style={{ fontSize: 12 }}>{t('llm.generalSettings.desc')}</Text></div>
+          </div>
+          <Space>
+            <Button size="small" onClick={handleResetGeneral} disabled={!aiSettings}>
+              {t('llm.generalSettings.reset')}
+            </Button>
+            <Button
+              size="small"
+              type="primary"
+              onClick={handleSaveGeneral}
+              loading={saveGeneralMutation.isPending}
+              disabled={!general}
+            >
+              {t('llm.generalSettings.save')}
+            </Button>
+          </Space>
+        </div>
+        {generalIsError ? (
+          <Alert type="error" message={t('llm.generalSettings.loadError')} showIcon />
+        ) : !general ? (
+          <div style={{ textAlign: 'center', padding: 24 }}><Spin /></div>
+        ) : (
+          <Row gutter={[16, 12]}>
+            <Col xs={24} sm={12} lg={8}>
+              <SettingField label={t('llm.generalSettings.maxRounds')}>
+                <InputNumber
+                  min={1}
+                  max={2000}
+                  style={{ width: '100%' }}
+                  value={general.max_rounds}
+                  onChange={numberChange('max_rounds')}
+                />
+              </SettingField>
+            </Col>
+            <Col xs={24} sm={12} lg={8}>
+              <SettingField label={t('llm.generalSettings.maxTokens')}>
+                <InputNumber
+                  min={1}
+                  max={32768}
+                  style={{ width: '100%' }}
+                  placeholder={t('llm.generalSettings.maxTokensPlaceholder')}
+                  value={general.max_tokens}
+                  onChange={(value) => setGeneralValue({ max_tokens: value })}
+                />
+              </SettingField>
+            </Col>
+            <Col xs={24} sm={12} lg={8}>
+              <SettingField label={t('llm.generalSettings.requestTimeout')}>
+                <InputNumber
+                  min={10}
+                  max={1800}
+                  style={{ width: '100%' }}
+                  value={general.request_timeout_sec}
+                  onChange={numberChange('request_timeout_sec')}
+                />
+              </SettingField>
+            </Col>
+            <Col xs={24} sm={12} lg={8}>
+              <SettingField label={t('llm.generalSettings.maxResultRows')}>
+                <InputNumber
+                  min={10}
+                  max={1000}
+                  style={{ width: '100%' }}
+                  value={general.max_result_rows}
+                  onChange={numberChange('max_result_rows')}
+                />
+              </SettingField>
+            </Col>
+            <Col xs={24} sm={12} lg={8}>
+              <SettingField label={t('llm.generalSettings.autoContinue')} hint={t('llm.generalSettings.autoContinueHint')}>
+                <InputNumber
+                  min={0}
+                  max={5}
+                  style={{ width: '100%' }}
+                  value={general.auto_continue_rounds}
+                  onChange={numberChange('auto_continue_rounds')}
+                />
+              </SettingField>
+            </Col>
+            <Col xs={24} sm={12} lg={8}>
+              <SettingField label={t('llm.generalSettings.maxHistory')} hint={t('llm.generalSettings.maxHistoryHint')}>
+                <InputNumber
+                  min={0}
+                  max={200}
+                  style={{ width: '100%' }}
+                  value={general.max_history_messages}
+                  onChange={numberChange('max_history_messages')}
+                />
+              </SettingField>
+            </Col>
+          </Row>
+        )}
+      </Card>
 
       {isLoading ? (
         <div style={{ textAlign: 'center', padding: 80 }}><Spin size="large" /></div>
