@@ -31,6 +31,13 @@ AI_QUERY_SETTINGS_DEFAULTS: dict[str, Any] = {
     "max_result_rows": 100,
     "auto_continue_rounds": 1,
     "max_history_messages": 20,
+    # Run budgets: a long exploratory question used to keep issuing hundreds of
+    # statements until the user stopped it by hand (one real run: 258 rounds /
+    # 846 statements / 62 minutes, no conclusion). These two ceilings are soft:
+    # once reached, the agent gets one final round with tools disabled and must
+    # produce a conclusion from the data it already has.
+    "max_tool_calls": 150,
+    "max_query_seconds": 900,
 }
 
 # Inclusive bounds, shared by the API schema and the defensive clamp below.
@@ -41,6 +48,8 @@ AI_QUERY_SETTINGS_BOUNDS: dict[str, tuple[int, int]] = {
     "max_result_rows": (10, 1000),
     "auto_continue_rounds": (0, 5),
     "max_history_messages": (0, 200),
+    "max_tool_calls": (10, 3000),
+    "max_query_seconds": (60, 7200),
 }
 
 

@@ -173,6 +173,10 @@ export function executeNLQueryStream(
  */
 export interface AIQuerySettingsValues {
   max_rounds: number;
+  /** Hard cap on executed SQL statements per query (10..3000). */
+  max_tool_calls: number;
+  /** Hard cap on total query wall-clock time in seconds (60..7200). */
+  max_query_seconds: number;
   max_tokens: number | null;
   request_timeout_sec: number;
   max_result_rows: number;

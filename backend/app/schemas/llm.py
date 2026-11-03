@@ -53,6 +53,8 @@ class AIQuerySettingsUpdate(BaseModel):
     max_result_rows: Optional[int] = Field(default=None, ge=10, le=1000)
     auto_continue_rounds: Optional[int] = Field(default=None, ge=0, le=5)
     max_history_messages: Optional[int] = Field(default=None, ge=0, le=200)
+    max_tool_calls: Optional[int] = Field(default=None, ge=10, le=3000)
+    max_query_seconds: Optional[int] = Field(default=None, ge=60, le=7200)
 
 
 class AIQuerySettingsResponse(BaseModel):

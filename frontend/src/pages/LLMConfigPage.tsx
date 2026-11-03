@@ -173,6 +173,34 @@ export default function LLMConfigPage() {
               </SettingField>
             </Col>
             <Col xs={24} sm={12} lg={8}>
+              <SettingField
+                label={t('llm.generalSettings.maxToolCalls')}
+                hint={t('llm.generalSettings.maxToolCallsHint')}
+              >
+                <InputNumber
+                  min={10}
+                  max={3000}
+                  style={{ width: '100%' }}
+                  value={general.max_tool_calls}
+                  onChange={numberChange('max_tool_calls')}
+                />
+              </SettingField>
+            </Col>
+            <Col xs={24} sm={12} lg={8}>
+              <SettingField
+                label={t('llm.generalSettings.maxQuerySeconds')}
+                hint={t('llm.generalSettings.maxQuerySecondsHint')}
+              >
+                <InputNumber
+                  min={60}
+                  max={7200}
+                  style={{ width: '100%' }}
+                  value={general.max_query_seconds}
+                  onChange={numberChange('max_query_seconds')}
+                />
+              </SettingField>
+            </Col>
+            <Col xs={24} sm={12} lg={8}>
               <SettingField label={t('llm.generalSettings.maxTokens')}>
                 <InputNumber
                   min={1}

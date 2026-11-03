@@ -140,6 +140,46 @@ class AIQuerySettingsUpdate(BaseModel):
 
 ---
 
+## 2.9 「跑一小时也不结束」的真正原因：没有预算、没有记忆、没有去重（2026-11-03 补）
+
+证据：2026-11-03 15:31 会话 31（`conversation_messages.id=188`，用户手动停止）：
+
+- 单次查询 **846 条 SQL**（去重后 826 条）、67 条执行失败（8%）、258+ 轮 LLM 请求、时长 **3703s（61.7 分钟）**、结论区为空；
+- `answer_blocks` 共 1,724 个块（846 sql / 779 result / 67 error / 32 think），结果载荷 1.95MB，模型产出的分析文字只有 32 段；
+- **不是字面重复**（846 条里只有 14 条完全相同），而是三类结构性浪费：
+  1. `src_emspcore__cdr_refactor` 一个 schema 占 657 条（78%），模型在 JSON 列上反复试错；
+  2. 同一批表的列清单被重复 introspect 10–13 次（`evse` 13、`emsp_visible_mapping` 12、`charging_location` 12……），跑完 800 条后又在末尾重新列 `information_schema.tables` —— 典型「忘了自己查过什么」；
+  3. 同一类错误反复重试：`function jsonb_pretty(json) does not exist`（该列是 `json` 不是 `jsonb`）、`column "is_del" does not exist`、`不允许执行多条 SQL 语句`，各 5–8 次。
+
+根因与修复（均与具体模型无关）：
+
+1. **没有预算感知 → 永远不收尾**。提示词只说「最多 500 轮」，模型不知道自己已经花了 40 分钟，也没有机制在用时过长时要求它交结论。
+   新增两个可配置预算（「AI 查询通用设置」）：
+   - `max_tool_calls`（默认 150，10–3000）：单次查询最多执行的 SQL 条数；
+   - `max_query_seconds`（默认 900，60–7200）：单次查询总时长（秒）。
+   用满 85% 时注入一次「[收敛提醒]」；用满时注入「[收尾]」并把下一轮请求的 `tool_choice` 置为 `none`，强制模型只输出结论；供应商忽略 `tool_choice` 时丢弃其工具调用、用同轮文本收尾；仍拿不到文本则 error + `done.message=""`（绝不静默）。
+2. **没有跨窗口记忆 → 反复重新探索**。`max_history_messages=20` 只保留最近约 10 个工具结果，之前的 schema 结论会被裁掉。
+   新增 `_RunMemo` 运行记忆：每条执行过的 SQL 压成一行（步骤号 / 数据库 / SQL 前 170 字 / 行数 / 前 2 行摘要），最多 60 行 6000 字，作为 `## Run progress` 段**在每轮请求时追加到 system 提示词**（不落库、不受裁剪影响），同时附带轮次 / SQL 数 / 已用时进度。
+3. **重复执行没有拦截**。同一指纹（去注释、压空白、小写、去尾分号的 SQL）在本次查询内重复出现时不再打数据库：直接回 `[ALREADY EXECUTED at step N]` + 摘要；连续 3 次注入「[收敛提醒]」。失败与校验拒绝的 SQL 也记入指纹，避免原地重试。
+4. **错误提示不可执行**。`_augment_sql_error()` 给常见错误追加一行修复建议：`json` 与 `jsonb` 的转换、不要猜列名先查 `information_schema.columns`、一次只提交一条 SELECT。
+5. **顺带修掉的隐患**：mid-run 的 user 提示（`[收尾]` / `[收敛提醒]` / `[纠正]`）会挤掉当前问题 —— `_trim_history` 保留「最后一个 user」，问题因此被裁掉，模型重新开始。现在 `_with_run_context` 按消息身份把原问题显式保留在 system 之后。
+
+新增配置（全部 `ai_query.` 前缀，仅存改动值，默认值在 `ai_query_settings.py`）：
+
+| 键 | 默认 | 范围 | 含义 |
+| --- | --- | --- | --- |
+| `max_tool_calls` | 150 | 10–3000 | 单次查询最多执行的 SQL 条数 |
+| `max_query_seconds` | 900 | 60–7200 | 单次查询总时长（秒） |
+
+验收（`/tmp/test_agent_acceptance.py` 12–15）：
+
+12. `max_tool_calls=5` → 只执行 5 条，第 6 次请求 `tool_choice=none`，`done.message` 为强制收尾产出的结论；
+13. `max_query_seconds=1` + 慢查询 → 同样强制收尾，不再无限跑；
+14. 相同 SQL 连续请求 → 只执行 1 次，工具回包带 `ALREADY EXECUTED`；
+15. `max_history_messages=4` 时每轮 system 仍含 `Run progress` 与已执行 SQL 清单，且当前问题不丢。
+
+---
+
 ## 3. 需求二：查询结束后折叠过程、只显示结论
 
 ### 3.1 现状

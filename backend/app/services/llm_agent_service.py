@@ -50,7 +50,10 @@ You have one tool: `query_database`. Use it to run SELECT queries against one of
 6. If a query fails, try to fix it based on the error message.
 7. Use markdown formatting for readability.
 8. You may use up to {max_rounds} tool-call rounds (one round = one assistant turn that calls query_database). Use as few queries as possible and stop as soon as you have enough data to answer.
-9. REMINDER: All output must be in {language}. This is non-negotiable.
+9. NEVER run the same SQL statement twice in one analysis. The runtime lists every statement you already executed under "Run progress" below; reuse those results instead of re-running them.
+10. Deliver partial conclusions early: as soon as the data you have supports a useful answer, stop exploring, write the conclusion with concrete numbers, and say what could still be checked. Do not try to read every table.
+11. A statement budget and a wall-clock budget apply to every run and are shown under "Run progress". When one is exhausted the runtime forces a final round with tools disabled, so plan the exploration instead of grinding.
+12. REMINDER: All output must be in {language}. This is non-negotiable.
 
 ## Database Schema
 
@@ -203,6 +206,202 @@ def _sse_event(event_type: str, data: dict) -> str:
 def _cid(correlation_id: str | None) -> str:
     """Format a correlation id for log prefixes, falling back to '-' when absent."""
     return correlation_id or "-"
+
+
+# ─── Per-run working memory, de-duplication and run budgets ─────────
+#
+# The window of messages sent to the model is bounded by
+# ``max_history_messages``.  In a long exploratory run (hundreds of
+# statements) that window only holds the last handful of tool results, so the
+# model forgets what it already learned: a real run re-introspected the same
+# tables a dozen times, re-ran the same statements and never converged (258
+# rounds / 846 statements / 62 minutes / no answer, stopped by the user).
+# A second real run showed the same shape because nothing told the model how
+# much budget it had already spent.
+#
+# The helpers below give every run a cheap, durable memory that survives the
+# window (a compact ledger of executed statements, re-injected into the system
+# prompt on each request) plus exact-SQL de-duplication and hard run budgets
+# that guarantee the turn ends with a conclusion instead of grinding forever.
+
+_SQL_NOISE_RE = re.compile(r"--[^\n]*|/\*.*?\*/", re.S)
+_LEDGER_MAX_LINES = 60
+_LEDGER_MAX_CHARS = 6000
+
+
+def _sql_fingerprint(sql: str) -> str:
+    """Normalise a statement so cosmetically different copies compare equal."""
+    text = _SQL_NOISE_RE.sub(" ", sql or "")
+    text = re.sub(r"\s+", " ", text).strip().rstrip(";").strip().lower()
+    return text
+
+
+def _clip(text: str, limit: int) -> str:
+    """Collapse whitespace and truncate for logs / ledger lines."""
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _rows_summary(columns: list, rows: list, total_rows: int) -> str:
+    """Very compact result preview kept in the run ledger."""
+    if not rows:
+        return "0 rows"
+    head = " | ".join(
+        ", ".join(str(v) for v in row[:6]) for row in rows[:2]
+    )
+    return _clip(
+        f"{total_rows} rows; columns={','.join(str(c) for c in columns[:8])}; head: {head}",
+        200,
+    )
+
+
+def _augment_sql_error(message: str) -> str:
+    """Append one actionable hint to the PostgreSQL errors that caused churn.
+
+    Roughly 8% of the statements in the stuck run failed on the same classes of
+    mistake (a ``json`` column treated as ``jsonb``, guessed column names, two
+    statements in one call).  The raw driver message does not say how to fix it,
+    so the model retried blind; one hint line cuts that loop short.
+    """
+    text = message or ""
+    lowered = text.lower()
+    if "不允许执行多条 sql 语句" in text or "multiple statements" in lowered:
+        return text + (
+            "\nHint: submit exactly ONE SELECT statement per query_database call; "
+            "split multi-statement SQL into separate calls."
+        )
+    if "jsonb_" in lowered and "does not exist" in lowered:
+        return text + (
+            "\nHint: this column is `json`, not `jsonb` — cast it with (col)::jsonb "
+            "or use plain json functions/operators (->, ->>, json_array_length)."
+        )
+    if "operator does not exist: json" in lowered:
+        return text + (
+            "\nHint: this value is `json`; cast it to jsonb ((col)::jsonb) before "
+            "using jsonb operators."
+        )
+    if "does not exist" in lowered and "column" in lowered:
+        return text + (
+            "\nHint: never guess column names — read information_schema.columns for "
+            "that table first, then retry with an exact name."
+        )
+    if "does not exist" in lowered and "relation" in lowered:
+        return text + (
+            "\nHint: the table name is wrong — confirm schema.table with "
+            "information_schema.tables first."
+        )
+    return text
+
+
+class _RunMemo:
+    """Working memory of one AI query run (one agent turn)."""
+
+    def __init__(self) -> None:
+        self.cache: dict[str, dict] = {}   # fingerprint -> {step, outcome, digest}
+        self.ledger: list[str] = []        # compact lines, bounded
+        self.executed = 0                  # statements actually sent to the database
+        self.duplicate_skips = 0
+        self.converge_notice_sent = False
+        self.dup_notice_sent = False
+
+    def lookup(self, fingerprint: str) -> dict | None:
+        return self.cache.get(fingerprint)
+
+    def record(
+        self,
+        fingerprint: str,
+        database: str,
+        sql: str,
+        outcome: str,
+        digest: str = "",
+        payload: str = "",
+    ) -> dict:
+        step = len(self.ledger) + 1
+        entry = {"step": step, "outcome": outcome, "digest": digest, "payload": payload}
+        self.cache[fingerprint] = entry
+        line = f"- [{step}] {database} | {_clip(sql, 170)} | {outcome}"
+        if digest:
+            line += f" | {digest}"
+        self.ledger.append(line)
+        if len(self.ledger) > _LEDGER_MAX_LINES:
+            del self.ledger[: len(self.ledger) - _LEDGER_MAX_LINES]
+        while (
+            len(self.ledger) > 10
+            and sum(len(x) for x in self.ledger) > _LEDGER_MAX_CHARS
+        ):
+            self.ledger.pop(0)
+        return entry
+
+
+def _run_context_text(
+    memo: _RunMemo,
+    *,
+    rounds_used: int,
+    max_rounds: int,
+    elapsed_sec: float,
+    max_query_seconds: int,
+    max_tool_calls: int,
+    force_wrap: bool,
+) -> str:
+    """Dynamic system-prompt suffix: budget progress + executed-statement ledger.
+
+    Recomputed for every request, so it is never lost by history trimming and it
+    tells the model how much of its budget is already gone.
+    """
+    parts = [
+        "\n\n---\n\n## Run progress (refreshed every round by the runtime)",
+        f"- Rounds used: {rounds_used} / {max_rounds}",
+        f"- SQL statements executed: {memo.executed} / {max_tool_calls}",
+        f"- Elapsed: {int(elapsed_sec)}s / {max_query_seconds}s",
+        "- A budget running out forces a final round with tools disabled, so answer "
+        "with what you have and state clearly what is still missing.",
+    ]
+    if force_wrap:
+        parts.append(
+            "- BUDGET EXHAUSTED: tools are disabled for this round. Write the "
+            "conclusion now from the results already collected."
+        )
+    if memo.ledger:
+        parts.append(
+            "\n### Statements already executed in this run (never run them again; reuse the results)\n"
+            + "\n".join(memo.ledger)
+        )
+    return "\n".join(parts)
+
+
+def _with_run_context(
+    messages: list[dict], limit: int, context_text: str, question_message: dict | None = None
+) -> list[dict]:
+    """Trimmed request messages with the run context appended to the system prompt.
+
+    ``_trim_history`` keeps the *last* ``user`` message, which is usually the
+    question.  Mid-run notices ("[收尾]", "[收敛提醒]", "[纠正]") are also
+    ``user`` messages though, so after one of them is appended the question can
+    fall out of the window.  It is re-inserted explicitly here — losing it makes
+    the model restart the analysis from scratch.
+    """
+    trimmed = _trim_history(messages, limit)
+    out = list(trimmed)
+    if out and out[0].get("role") == "system" and context_text:
+        out[0] = {**out[0], "content": out[0]["content"] + context_text}
+    if question_message is not None and not any(m is question_message for m in out):
+        out.insert(1, dict(question_message))
+    return out
+
+
+def _wrap_up_prompt(
+    reason: str, executed: int, max_tool_calls: int, elapsed_sec: float, max_query_seconds: int
+) -> str:
+    """User-role notice that switches the run into forced-conclusion mode."""
+    what = "SQL 条数" if reason == "sql" else "总时长"
+    return (
+        f"[收尾] 本次查询的{what}预算已用完（已执行 {executed}/{max_tool_calls} 条 SQL，"
+        f"已用时 {int(elapsed_sec)}/{max_query_seconds} 秒），工具已禁用。\n"
+        "请立即基于已经拿到的查询结果输出结论，不要再请求任何数据：\n"
+        "1) 说明可以确定的事实与关键数字（附上依据的表/字段）；\n"
+        "2) 说明目前还不确定、需要更多数据才能判断的点；\n"
+        "3) 给出用户下一步可以继续问的具体问题（便于开启下一轮查询）。"
+    )
 
 
 # Some providers (notably DeepSeek-style endpoints that use DSML tool tokens)
@@ -373,6 +572,8 @@ async def run_agent_stream(
     max_result_rows = int(limits["max_result_rows"])
     auto_continue_rounds = int(limits["auto_continue_rounds"])
     max_history_messages = int(limits["max_history_messages"])
+    max_tool_calls = int(limits["max_tool_calls"])
+    max_query_seconds = int(limits["max_query_seconds"])
     # A global max_tokens (when set) overrides the per-model configuration.
     _global_max_tokens = limits.get("max_tokens")
     if _global_max_tokens is None:
@@ -381,9 +582,10 @@ async def run_agent_stream(
         max_tokens = int(_global_max_tokens)
     logger.info(
         "[cid=%s] stage=limits max_rounds=%d max_tokens=%d timeout=%ds "
-        "max_result_rows=%d auto_continue=%d history=%d",
+        "max_result_rows=%d auto_continue=%d history=%d max_tool_calls=%d max_query_seconds=%d",
         cid, max_rounds, max_tokens, request_timeout_sec,
         max_result_rows, auto_continue_rounds, max_history_messages,
+        max_tool_calls, max_query_seconds,
     )
 
     # Filter out connections whose pool is unavailable (failed to initialize)
@@ -475,6 +677,7 @@ async def run_agent_stream(
     # Inject language directive into user message for double enforcement
     # (multi-system-message not used due to API compatibility concerns)
     messages.append({"role": "user", "content": f"[⬤ Output language: {lang_name}. ALL reasoning, analysis, and conclusions MUST be in {lang_name} — regardless of the question's language or database data values. ⬤] {question}"})
+    question_message = messages[-1]
 
     before_trim = len(messages)
     messages = _trim_history(messages, max_history_messages)
@@ -486,13 +689,84 @@ async def run_agent_stream(
     markup_retries = 0
     llm_time = 0.0
     total_llm_time = 0.0
+    # Per-run memory + budget state (see _RunMemo above).
+    memo = _RunMemo()
+    wrap_up_requested = False
+    wrap_up_retries = 0
 
     async with httpx.AsyncClient(timeout=request_timeout_sec, verify=False) as client:
         for _round in range(max_rounds):
+            elapsed_sec = time.monotonic() - started
+
+            # ── Run budgets ────────────────────────────────────────────
+            # Soft: warn the model once it has spent 85% of either budget so it
+            # converges by itself. Hard: once a budget is exhausted, switch the
+            # next request into forced-conclusion mode (tools disabled) instead
+            # of grinding until the round cap or the user stops the run.
+            if not wrap_up_requested:
+                budget_hit: str | None = None
+                if memo.executed >= max_tool_calls:
+                    budget_hit = "sql"
+                elif elapsed_sec >= max_query_seconds:
+                    budget_hit = "time"
+                if budget_hit:
+                    wrap_up_requested = True
+                    messages.append({
+                        "role": "user",
+                        "content": _wrap_up_prompt(
+                            budget_hit, memo.executed, max_tool_calls,
+                            elapsed_sec, max_query_seconds,
+                        ),
+                    })
+                    logger.warning(
+                        "[cid=%s] stage=budget_wrap round=%d reason=%s executed=%d/%d "
+                        "elapsed=%.1fs/%ds",
+                        cid, _round + 1, budget_hit, memo.executed, max_tool_calls,
+                        elapsed_sec, max_query_seconds,
+                    )
+                    yield _sse_event("error", {"message": (
+                        f"本次查询已用完{'SQL 条数' if budget_hit == 'sql' else '时间'}预算"
+                        f"（已执行 {memo.executed}/{max_tool_calls} 条 SQL，"
+                        f"已用时 {int(elapsed_sec)}/{max_query_seconds} 秒），"
+                        "正在强制收尾；可在「AI 配置 → 通用设置」调大预算。"
+                    )})
+                elif not memo.converge_notice_sent:
+                    used = max(memo.executed / max_tool_calls, elapsed_sec / max_query_seconds)
+                    if used >= 0.85:
+                        memo.converge_notice_sent = True
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                "[收敛提醒] 本次查询已使用 85% 的预算"
+                                f"（SQL {memo.executed}/{max_tool_calls} 条，"
+                                f"{int(elapsed_sec)}/{max_query_seconds} 秒）。"
+                                "请立即收敛：给出当前可以确定的部分结论并说明还缺什么，"
+                                "如需继续只再执行 1-2 条最关键的查询。"
+                            ),
+                        })
+                        logger.info(
+                            "[cid=%s] stage=budget_notice round=%d executed=%d elapsed=%.1fs",
+                            cid, _round + 1, memo.executed, elapsed_sec,
+                        )
+
+            run_context = _run_context_text(
+                memo,
+                rounds_used=_round + 1,
+                max_rounds=max_rounds,
+                elapsed_sec=elapsed_sec,
+                max_query_seconds=max_query_seconds,
+                max_tool_calls=max_tool_calls,
+                force_wrap=wrap_up_requested,
+            )
+            request_messages = _with_run_context(
+                messages, max_history_messages, run_context, question_message
+            )
+
             llm_start = time.monotonic()
             logger.info(
-                "[cid=%s] stage=llm_call round=%d/%d history_msgs=%d",
-                cid, _round + 1, max_rounds, len(messages),
+                "[cid=%s] stage=llm_call round=%d/%d history_msgs=%d executed=%d wrap_up=%s",
+                cid, _round + 1, max_rounds, len(request_messages),
+                memo.executed, wrap_up_requested,
             )
 
             # Call LLM with streaming + tool definition
@@ -506,13 +780,15 @@ async def run_agent_stream(
                 json={
                     "model": model,
                     # Only the recent window goes to the model; ``messages`` keeps
-                    # growing so the whole turn can be persisted.
-                    "messages": _trim_history(messages, max_history_messages),
+                    # growing so the whole turn can be persisted.  The run context
+                    # (budget + ledger) rides on the system prompt so trimming can
+                    # never erase what has already been explored.
+                    "messages": request_messages,
                     "temperature": llm_config.get("temperature", 0.1),
                     "max_tokens": max_tokens,
                     "stream": True,
                     "tools": [TOOL_DEFINITION],
-                    "tool_choice": "auto",
+                    "tool_choice": "none" if wrap_up_requested else "auto",
                 },
             ) as resp:
                 if resp.status_code != 200:
@@ -652,6 +928,57 @@ async def run_agent_stream(
 
             messages.append(assistant_msg)
 
+            # ── Forced conclusion round ────────────────────────────────
+            # The budget is exhausted: the model must answer, not fetch more
+            # data.  Some providers ignore tool_choice="none"; in that case the
+            # tool calls are dropped and whatever text came with them is used.
+            if wrap_up_requested and tool_calls_final:
+                if accumulated_content.strip():
+                    answer_text = "".join(
+                        answer_parts + [_strip_tool_markup(accumulated_content)]
+                    ).strip()
+                    logger.warning(
+                        "[cid=%s] stage=budget_wrap_answer round=%d chars=%d ignored_tool_calls=%d",
+                        cid, _round + 1, len(answer_text), len(tool_calls_final),
+                    )
+                    yield _sse_event("done", {
+                        "message": answer_text,
+                        "llm_time_ms": total_llm_time,
+                        "conversation_messages": _trim_history(messages, max_history_messages),
+                    })
+                    return
+                # No usable text plus dangling tool_calls: drop that assistant
+                # turn (an assistant tool_calls message without tool replies
+                # breaks the next request) and ask once more, cleanly.
+                messages.pop()
+                if wrap_up_retries < 1:
+                    wrap_up_retries += 1
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "[收尾] 预算已用完且工具已禁用，不要再调用工具："
+                            "请直接用已有的查询结果输出结论（可以确定的事实与数字、"
+                            "仍不确定的点、建议继续问的问题）。"
+                        ),
+                    })
+                    logger.warning(
+                        "[cid=%s] stage=budget_wrap_retry round=%d", cid, _round + 1
+                    )
+                    continue
+                logger.warning(
+                    "[cid=%s] stage=budget_wrap_giveup round=%d", cid, _round + 1
+                )
+                yield _sse_event("error", {"message": (
+                    "本次查询的预算已用完，但模型没有返回可用的结论；"
+                    "已执行的查询结果保留在上方分析过程中。可调大预算后重试。"
+                )})
+                yield _sse_event("done", {
+                    "message": "",
+                    "llm_time_ms": total_llm_time,
+                    "conversation_messages": _trim_history(messages, max_history_messages),
+                })
+                return
+
             # Execute tool calls
             if not tool_calls_final:
                 # No tool calls → this round produced the answer text bit.
@@ -734,6 +1061,23 @@ async def run_agent_stream(
                     })
                     return
 
+                if wrap_up_requested and not answer_text.strip():
+                    # Budget-driven final round that produced nothing usable:
+                    # never let this look like a successful empty answer.
+                    logger.warning(
+                        "[cid=%s] stage=budget_wrap_empty round=%d", cid, _round + 1
+                    )
+                    yield _sse_event("error", {"message": (
+                        "本次查询的预算已用完，但模型没有给出结论；"
+                        "已执行的查询结果保留在上方分析过程中。可调大预算后重试。"
+                    )})
+                    yield _sse_event("done", {
+                        "message": "",
+                        "llm_time_ms": total_llm_time,
+                        "conversation_messages": _trim_history(messages, max_history_messages),
+                    })
+                    return
+
                 logger.info(
                     "[cid=%s] stage=done rounds=%d llm_time_ms=%.1f total_ms=%.1f",
                     cid, _round + 1, llm_time, (time.monotonic() - started) * 1000,
@@ -787,14 +1131,95 @@ async def run_agent_stream(
                     })
                     continue
 
+                # ── SQL-statement budget ──────────────────────────────────
+                # One round may request several statements; stop executing as
+                # soon as the run budget is exhausted (the next round is the
+                # forced conclusion round) instead of blowing past it in a burst.
+                if memo.executed >= max_tool_calls:
+                    tool_result = (
+                        "[BUDGET] The SQL-statement budget for this query is exhausted; "
+                        "this statement was NOT executed. Answer from the results already collected."
+                    )
+                    logger.warning(
+                        "[cid=%s] stage=budget_skip round=%d executed=%d/%d",
+                        cid, _round + 1, memo.executed, max_tool_calls,
+                    )
+                    yield _sse_event("error", {"message": (
+                        f"已达到本次查询的 SQL 条数上限（{max_tool_calls}），"
+                        "后续语句未执行，正在收尾。"
+                    )})
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": tool_result,
+                    })
+                    continue
+
+                fingerprint = f"{db_name}\x00{_sql_fingerprint(sql)}"
+
+                # ── Exact re-run guard ────────────────────────────────────
+                # The model re-ran identical statements repeatedly in real
+                # runs; short-circuit them so they cost neither DB time nor a
+                # fresh result payload, and remind the model it already has it.
+                hit = memo.lookup(fingerprint) if fingerprint.strip() else None
+                if hit is not None:
+                    memo.duplicate_skips += 1
+                    # Replay the cached payload (when it was small enough to
+                    # keep) so losing the result to history trimming never
+                    # forces the model to re-derive it with a new query.
+                    if hit.get("payload"):
+                        replay = f"\nCached result (reuse it, do not re-run):\n{hit['payload']}"
+                    elif hit["digest"]:
+                        replay = f" Digest: {hit['digest']}"
+                    else:
+                        replay = ""
+                    tool_result = (
+                        f"[ALREADY EXECUTED at step {hit['step']}] This exact SQL was already run "
+                        f"in this query ({hit['outcome']}).{replay}\nDo NOT run it again — reuse the "
+                        "earlier result and move on to the conclusion."
+                    )
+                    logger.info(
+                        "[cid=%s] stage=duplicate_skip round=%d step=%d skips=%d",
+                        cid, _round + 1, hit["step"], memo.duplicate_skips,
+                    )
+                    yield _sse_event("error", {"message": (
+                        f"已跳过重复查询：该 SQL 在本次查询第 {hit['step']} 步执行过"
+                        f"（{hit['outcome']}），直接复用已有结果。"
+                    )})
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": tool_result,
+                    })
+                    if memo.duplicate_skips >= 3 and not memo.dup_notice_sent:
+                        memo.dup_notice_sent = True
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                "[收敛提醒] 你已经连续执行了执行过的 SQL（已自动跳过）。"
+                                "不要重复查同样的数据：请直接用已有结果给出结论，"
+                                "或只补一条真正缺失的查询。"
+                            ),
+                        })
+                        logger.warning(
+                            "[cid=%s] stage=duplicate_notice round=%d", cid, _round + 1
+                        )
+                    continue
+
                 # Validate
                 is_valid, validated_or_err = validate_readonly_sql(sql)
                 if not is_valid:
                     tool_result = f"SQL validation failed: {validated_or_err}"
                     logger.warning("[cid=%s] stage=sql_validate rejected round=%d", cid, _round + 1)
                     yield _sse_event("error", {"message": tool_result})
+                    if fingerprint.strip():
+                        memo.record(
+                            fingerprint, db_name, sql,
+                            f"REJECTED: {_clip(str(validated_or_err), 80)}",
+                        )
                 else:
                     sql_start = time.monotonic()
+                    memo.executed += 1
                     try:
                         columns, rows = await _execute_sql(pools, db_name, validated_or_err)
                         preview_rows = rows[:max_result_rows]
@@ -822,16 +1247,32 @@ async def run_agent_stream(
                         # Chinese data values from causing mid-response language switch
                         tool_result = f"[REMINDER: You MUST analyze these results and write ALL conclusions in {lang_name}. The language of data values is irrelevant.]\n\n{result_preview}"
                         logger.info(
-                            "[cid=%s] stage=sql_exec db=%s rows=%d duration_ms=%.1f",
+                            "[cid=%s] stage=sql_exec db=%s rows=%d duration_ms=%.1f executed=%d/%d",
                             cid, db_name, len(rows), (time.monotonic() - sql_start) * 1000,
+                            memo.executed, max_tool_calls,
                         )
+                        if fingerprint.strip():
+                            memo.record(
+                                fingerprint, db_name, sql, f"{len(rows)} rows",
+                                _rows_summary(columns, preview_rows, len(rows)),
+                                # Keep the full replayable payload only when it
+                                # is small; the cache is per run and bounded.
+                                payload=result_preview if len(result_preview) <= 20000 else "",
+                            )
                     except Exception as e:
-                        tool_result = f"Query execution failed: {str(e)}"
+                        # Give the model one concrete fix instead of a bare
+                        # driver message, which used to trigger retry churn.
+                        tool_result = _augment_sql_error(f"Query execution failed: {str(e)}")
                         logger.warning(
                             "[cid=%s] stage=sql_exec db=%s failed duration_ms=%.1f: %s",
                             cid, db_name, (time.monotonic() - sql_start) * 1000, e,
                         )
                         yield _sse_event("error", {"message": tool_result})
+                        if fingerprint.strip():
+                            memo.record(
+                                fingerprint, db_name, sql,
+                                f"FAILED: {_clip(str(e), 80)}",
+                            )
 
                 messages.append({
                     "role": "tool",
