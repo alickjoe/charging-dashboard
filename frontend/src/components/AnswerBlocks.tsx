@@ -170,7 +170,9 @@ export function parseAnswerBlocks(raw: string): StreamBlock[] {
         merged.push({
           key: merged.length,
           type: blockType,
-          content: (b.content as string) || '',
+          // Older rows persist agent errors as ``{type:'error', message}`` while
+          // the live stream uses ``content``; accept both so failures are not blank.
+          content: (b.content as string) || (b.message as string) || '',
           columns: b.columns as string[] | undefined,
           rows: b.rows as unknown[][] | undefined,
           totalRows: b.total_rows as number | undefined,

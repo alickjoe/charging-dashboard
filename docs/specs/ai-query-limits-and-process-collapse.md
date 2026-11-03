@@ -115,6 +115,19 @@ class AIQuerySettingsUpdate(BaseModel):
 
 ---
 
+## 2.7 模型退化：提示词回显与重复循环（2026-11-03 补）
+
+实测（会话 29、消息 182）：一轮回答 121KB、耗时 153s，`raw_messages` 里的 assistant 内容 36KB，以 `</tool invoke></functions>` 开头后紧跟 `# 用户问题` 与**整段提示词回显**，中间夹杂大量 `<function name=...>` 工具 schema 文本、以及「好。执行。」式重复 400 次的退化循环，最后由 `finish_reason=length` → 自动续写 1 次 → 「输出达到 token 上限被截断」收尾。
+
+原因是工具调用标记泄漏成正文后，模型看到自己上一轮的畸形输出，进入「回显提示词 / 无限重复」的退化模式。处理：
+
+- `_detect_bad_round(content, question)`：识别 `markup_only` / `markup_prefix`（以控制标记开头）/ `prompt_echo`（包含用户问题前 40 字或 `## CRITICAL LANGUAGE REQUIREMENT`、`# 用户问题` 等标记）/ `repetition`（同一行占比 ≥30%，或短前缀重复 ≥20 次，覆盖无换行的连续复读）。
+- 判定为坏轮时**丢弃该轮 assistant 消息**（避免污染下一轮上下文），回一次 `[纠正]` 提示再请求；仍坏则 error（`模型本轮输出异常（只含工具标记、回显了提示词或重复退化）`）+ `done.message=""`。
+- 流式看门狗：累计内容每增长 2000 字检查一次，命中 `prompt_echo`/`repetition`/`markup_prefix` 立即中断上游流，不再为垃圾输出继续烧 token。
+- 历史错误的渲染：落库的错误块是 `{type:'error', message}`（实时流用 `content`），前端 `parseAnswerBlocks` 两者都接受，避免失败记录显示成空白 Alert。
+
+---
+
 ## 3. 需求二：查询结束后折叠过程、只显示结论
 
 ### 3.1 现状

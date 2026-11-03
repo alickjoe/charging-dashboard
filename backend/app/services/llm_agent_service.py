@@ -215,6 +215,62 @@ def _strip_tool_markup(text: str) -> str:
     return _TOOL_MARKUP_RE.sub(" ", text).strip()
 
 
+_PROMPT_ECHO_MARKERS = (
+    "## CRITICAL LANGUAGE REQUIREMENT",
+    "# 用户问题",
+    "You are a database analyst",
+    "## Database:",
+)
+
+
+def _detect_bad_round(content: str, question: str) -> str | None:
+    """Classify a no-tool-call round whose text is not a usable answer.
+
+    Some DeepSeek-style endpoints leak raw DSML tool markup into ``content``
+    instead of returning ``tool_calls``.  When that happens the model sees its
+    own broken output next round and often degenerates: it echoes the prompt
+    back, repeats the same line hundreds of times, or keeps producing only
+    control markup.  None of that may be shown as the answer.
+
+    Returns a short reason code (for logs / retry wording) or ``None`` when the
+    round looks like a normal answer.
+    """
+    if not content or not content.strip():
+        return None
+    text = content.strip()
+
+    if not _strip_tool_markup(text):
+        return "markup_only"
+    if _TOOL_MARKUP_RE.match(text):
+        return "markup_prefix"
+
+    flat = " ".join(text.split())
+    probe = " ".join((question or "").split())[:40]
+    if len(probe) >= 20 and probe in flat:
+        return "prompt_echo"
+    for marker in _PROMPT_ECHO_MARKERS:
+        if marker in text:
+            return "prompt_echo"
+
+    lines = [ln.strip() for ln in text.splitlines() if len(ln.strip()) >= 2]
+    if len(lines) >= 40:
+        counts: dict[str, int] = {}
+        for ln in lines:
+            counts[ln] = counts.get(ln, 0) + 1
+        if max(counts.values()) / len(lines) >= 0.3:
+            return "repetition"
+
+    # Degeneration often comes as one endless line ("好。执行。好。执行。…") with
+    # no newlines at all, so also look for a short prefix repeated many times.
+    if len(text) >= 500:
+        for size in (12, 20, 30):
+            unit = text[:size]
+            if unit.strip() and text.count(unit) >= 20:
+                return "repetition"
+
+    return None
+
+
 def _trim_history(messages: list[dict], limit: int) -> list[dict]:
     """Bound the conversation window sent to the LLM.
 
@@ -433,6 +489,8 @@ async def run_agent_stream(
                 tool_call_buf: dict[int, dict] = {}  # index -> {id, name, arguments}
                 finish_reason: str | None = None
                 timed_out = False
+                degenerate_reason: str | None = None
+                watchdog_next = 2000
 
                 try:
                     async for line in resp.aiter_lines():
@@ -460,6 +518,19 @@ async def run_agent_stream(
                         if content:
                             accumulated_content += content
                             yield _sse_event("think", {"content": content})
+                            # Degeneration watchdog: stop paying for junk as soon
+                            # as the model starts echoing the prompt or looping.
+                            if len(accumulated_content) >= watchdog_next:
+                                watchdog_next = len(accumulated_content) + 2000
+                                reason = _detect_bad_round(accumulated_content, question)
+                                if reason in ("prompt_echo", "repetition", "markup_prefix"):
+                                    degenerate_reason = reason
+                                    logger.warning(
+                                        "[cid=%s] stage=degeneration round=%d reason=%s chars=%d",
+                                        cid, _round + 1, reason,
+                                        len(accumulated_content),
+                                    )
+                                    break
 
                         # Tool calls in delta
                         tc_deltas = delta.get("tool_calls", [])
@@ -509,6 +580,12 @@ async def run_agent_stream(
                 })
                 return
 
+            if degenerate_reason:
+                logger.warning(
+                    "[cid=%s] stage=degeneration_stop round=%d reason=%s chars=%d",
+                    cid, _round + 1, degenerate_reason, len(accumulated_content),
+                )
+
             # Build assistant message from accumulated content + tool calls
             assistant_msg: dict = {"role": "assistant", "content": accumulated_content or None}
             tool_calls_list = sorted(tool_call_buf.values(), key=lambda x: list(tool_call_buf.keys()))
@@ -538,31 +615,38 @@ async def run_agent_stream(
             if not tool_calls_final:
                 # No tool calls → this round produced the answer text bit.
                 cleaned_content = _strip_tool_markup(accumulated_content)
-                if accumulated_content.strip() and not cleaned_content:
-                    # Only control markup came back: the round produced no answer.
+                bad_round = _detect_bad_round(accumulated_content, question)
+                if bad_round:
+                    # Drop the junk assistant turn: leaving it in the history
+                    # poisons the next request (the model starts echoing it).
+                    if messages and messages[-1].get("role") == "assistant":
+                        messages.pop()
                     if markup_retries < 1:
                         markup_retries += 1
                         logger.warning(
-                            "[cid=%s] stage=tool_markup_leak round=%d retry=%d raw=%r",
-                            cid, _round + 1, markup_retries, accumulated_content[:120],
+                            "[cid=%s] stage=bad_round round=%d reason=%s retry=%d "
+                            "chars=%d raw=%r",
+                            cid, _round + 1, bad_round, markup_retries,
+                            len(accumulated_content), accumulated_content[:120],
                         )
                         messages.append({
                             "role": "user",
                             "content": (
-                                "[纠正] 上一条回复只有工具调用标记、没有实际内容。"
-                                "如果还需要查询数据，请调用 query_database；"
-                                "否则请直接用中文给出最终结论，不要输出任何 XML/工具标记。"
+                                "[纠正] 上一条回复异常（只含工具标记、回显了提示词或重复内容），"
+                                "已被丢弃。请不要复述问题或提示词，也不要输出任何 XML/工具标记；"
+                                "如需数据请调用 query_database，否则直接用中文给出最终结论。"
                             ),
                         })
                         continue
                     logger.warning(
-                        "[cid=%s] stage=tool_markup_giveup round=%d raw=%r",
-                        cid, _round + 1, accumulated_content[:120],
+                        "[cid=%s] stage=bad_round_giveup round=%d reason=%s chars=%d raw=%r",
+                        cid, _round + 1, bad_round, len(accumulated_content),
+                        accumulated_content[:120],
                     )
                     yield _sse_event("error", {"message": (
-                        "模型本轮只返回了工具调用标记、没有生成结论，本次回答已中止；"
-                        "请重试，或换一个模型（部分模型的工具调用标记会被服务端当成"
-                        "普通文本返回）。已生成内容见上方分析过程。"
+                        "模型本轮输出异常（只含工具标记、回显了提示词或重复退化），"
+                        "本次回答已中止；请重试，或换一个模型（部分模型的工具调用标记"
+                        "会被服务端当成普通文本返回）。已生成内容见上方分析过程。"
                     )})
                     yield _sse_event("done", {
                         "message": "",
