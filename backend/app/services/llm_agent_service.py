@@ -1,6 +1,7 @@
 """Agent service with LLM tool-calling loop for database analysis."""
 
 import json
+import re
 import time
 import logging
 from typing import AsyncGenerator
@@ -193,6 +194,27 @@ def _cid(correlation_id: str | None) -> str:
     return correlation_id or "-"
 
 
+# Some providers (notably DeepSeek-style endpoints that use DSML tool tokens)
+# leak the raw tool-call control markup into the plain ``content`` stream
+# instead of returning parsed ``tool_calls``.  A round whose whole content is
+# only that markup carries no answer at all, so it must never be presented or
+# persisted as the conclusion.
+_TOOL_MARKUP_RE = re.compile(
+    r"</?tool[ _]?(?:invoke|calls?|call|sep|begin|end)[^>]*>"
+    r"|</?functions?>"
+    r"|<function[=\s][^>]*>?"
+    r"|<\|[^|]{0,40}\|>",
+    re.IGNORECASE,
+)
+
+
+def _strip_tool_markup(text: str) -> str:
+    """Drop leaked tool-call control markup from model text."""
+    if not text:
+        return ""
+    return _TOOL_MARKUP_RE.sub(" ", text).strip()
+
+
 def _trim_history(messages: list[dict], limit: int) -> list[dict]:
     """Bound the conversation window sent to the LLM.
 
@@ -364,7 +386,9 @@ async def run_agent_stream(
 
     answer_parts: list[str] = []
     continuations_used = 0
+    markup_retries = 0
     llm_time = 0.0
+    total_llm_time = 0.0
 
     async with httpx.AsyncClient(timeout=request_timeout_sec, verify=False) as client:
         for _round in range(max_rounds):
@@ -468,6 +492,7 @@ async def run_agent_stream(
                     )})
 
             llm_time = round((time.monotonic() - llm_start) * 1000, 2)
+            total_llm_time = round(total_llm_time + llm_time, 2)
 
             if timed_out:
                 # Partial text already streamed as think events; a half-finished
@@ -479,7 +504,7 @@ async def run_agent_stream(
                 )
                 yield _sse_event("done", {
                     "message": "",
-                    "llm_time_ms": llm_time,
+                    "llm_time_ms": total_llm_time,
                     "conversation_messages": _trim_history(messages, max_history_messages),
                 })
                 return
@@ -512,8 +537,41 @@ async def run_agent_stream(
             # Execute tool calls
             if not tool_calls_final:
                 # No tool calls → this round produced the answer text bit.
-                if accumulated_content:
-                    answer_parts.append(accumulated_content)
+                cleaned_content = _strip_tool_markup(accumulated_content)
+                if accumulated_content.strip() and not cleaned_content:
+                    # Only control markup came back: the round produced no answer.
+                    if markup_retries < 1:
+                        markup_retries += 1
+                        logger.warning(
+                            "[cid=%s] stage=tool_markup_leak round=%d retry=%d raw=%r",
+                            cid, _round + 1, markup_retries, accumulated_content[:120],
+                        )
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                "[纠正] 上一条回复只有工具调用标记、没有实际内容。"
+                                "如果还需要查询数据，请调用 query_database；"
+                                "否则请直接用中文给出最终结论，不要输出任何 XML/工具标记。"
+                            ),
+                        })
+                        continue
+                    logger.warning(
+                        "[cid=%s] stage=tool_markup_giveup round=%d raw=%r",
+                        cid, _round + 1, accumulated_content[:120],
+                    )
+                    yield _sse_event("error", {"message": (
+                        "模型本轮只返回了工具调用标记、没有生成结论，本次回答已中止；"
+                        "请重试，或换一个模型（部分模型的工具调用标记会被服务端当成"
+                        "普通文本返回）。已生成内容见上方分析过程。"
+                    )})
+                    yield _sse_event("done", {
+                        "message": "",
+                        "llm_time_ms": total_llm_time,
+                        "conversation_messages": _trim_history(messages, max_history_messages),
+                    })
+                    return
+                if cleaned_content:
+                    answer_parts.append(cleaned_content)
                 answer_text = "".join(answer_parts)
 
                 if finish_reason == "length" and continuations_used < auto_continue_rounds:
@@ -546,7 +604,7 @@ async def run_agent_stream(
                     )})
                     yield _sse_event("done", {
                         "message": "",
-                        "llm_time_ms": llm_time,
+                        "llm_time_ms": total_llm_time,
                         "conversation_messages": _trim_history(messages, max_history_messages),
                     })
                     return
@@ -557,7 +615,7 @@ async def run_agent_stream(
                 )
                 yield _sse_event("done", {
                     "message": answer_text,
-                    "llm_time_ms": llm_time,
+                    "llm_time_ms": total_llm_time,
                     "conversation_messages": _trim_history(messages, max_history_messages),
                 })
                 return
@@ -657,6 +715,6 @@ async def run_agent_stream(
         )})
         yield _sse_event("done", {
             "message": "",
-            "llm_time_ms": llm_time,
+            "llm_time_ms": total_llm_time,
             "conversation_messages": _trim_history(messages, max_history_messages),
         })
