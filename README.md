@@ -18,6 +18,10 @@ AI 数据库查询工具 — 多数据源 PostgreSQL 数据库浏览器与图表
 irm https://raw.githubusercontent.com/alickjoe/charging-dashboard/main/scripts/install-aidbquery.ps1 | iex
 ```
 
+> 脚本会先停掉正在运行的旧实例，再安装/升级，并在结束时自动跑 `adq doctor` 校验安装完整性
+> （新版本刚发布的几分钟内 npm 大体积运行时包可能仍在发布，脚本会自动等待；也可用参数固定版本：
+> `& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/alickjoe/charging-dashboard/main/scripts/install-aidbquery.ps1'))) -Version <x.y.z>`）。
+
 已有 Node.js 18+ 时也可以直接：
 
 ```bash
